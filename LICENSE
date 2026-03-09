@@ -1,0 +1,40 @@
+RobUI License
+
+Copyright (c) 2026 RobUI
+
+Permission is granted to view, study, and modify the source code of this
+addon for personal use and for contributing improvements to the official
+RobUI project.
+
+Use of this code follows a "quid pro quo" principle:
+If you use code from this project, you must give something back to the project.
+
+This means that:
+
+• Improvements or fixes should be contributed back to the RobUI project
+  when possible (for example via pull requests).
+
+• Any project using code from RobUI must clearly credit the RobUI project
+  and its author.
+
+• Reuse of code in other addons or projects requires permission from
+  the author.
+
+Permission to reuse code will generally be granted as long as proper
+credit is given and the author has been contacted beforehand.
+
+The following is NOT permitted without explicit permission:
+
+• Redistributing this addon under a different name
+• Publishing derivative addons based on this codebase
+• Reusing substantial portions of the code without credit
+• Distributing modified versions outside the official repository
+
+All contributions to the RobUI project will be properly credited.
+
+The author reserves the right to modify or change this license at any time
+without prior notice.
+
+This project is source-available but not open source.
+
+All rights reserved.
