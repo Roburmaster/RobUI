@@ -1,0 +1,238 @@
+RobUI GridCore (rgrid) API
+Updated Developer Guide
+Version: 1.1 | Date: 2026-02-24
+
+This guide explains how to connect external UI elements (plugins) to RobUI Combat Grid (GridCore / rgrid). Register your plugin once, and let GridCore handle the anchoring, scaling, and visibility logic.
+
+1. Getting the GridCore Reference
+GridCore may not be fully loaded when your addon initializes. It is highly recommended to fetch it dynamically or during the PLAYER_LOGIN event.
+
+Lua
+local function GetGridCore()
+    return _G.RGridCore
+end
+2. Registering a Plugin (RegisterPlugin)
+Method: GC:RegisterPlugin(pluginId, optionsTable)
+
+optionsTable fields:
+
+name (string): The display name shown in the GridCore settings list.
+
+build (function): Required. A function that creates or returns your UI frame.
+
+setScale (function): Optional. A callback that receives (frame, globalScale) when the grid scale changes.
+
+setOrientation (function): Optional. A callback that receives (frame, orient) when the user changes the layout direction ("H" or "V").
+
+settings (function): Optional. A function to build a custom settings UI inside the /rgrid panel.
+
+default (table): Default anchor configuration (e.g., coordinates, visibility).
+
+3. Attaching to the Grid (AttachPlugin)
+Method: GC:AttachPlugin(pluginId, true)
+Forces the plugin to attach to the grid. The second argument (true) ensures it is created if it hasn't been attached before.
+
+4. Updating Layout (ReflowAll)
+Method: GC:ReflowAll("reason")
+Manually triggers a recalculation of all plugin positions and scales.
+
+5. Complete Example Template
+Below is a complete, working example of how to build and register a frame with GridCore:
+
+Lua
+local PLUGIN_ID = "my_cool_plugin"
+local myFrame = nil
+
+-- 1. Create your frame
+local function BuildOrGetFrame()
+    if myFrame then return myFrame end
+
+    myFrame = CreateFrame("Frame", "MyCoolPluginFrame", UIParent)
+    myFrame:SetSize(200, 40)
+    myFrame:SetPoint("CENTER")
+
+    -- Add textures, text, or buttons to your frame here
+
+    return myFrame
+end
+
+-- 2. Handle scaling (Optional but recommended)
+local function ApplyCustomScale(frame, globalScale)
+    local localScale = 1.0
+    if frame.SetScale then
+        frame:SetScale(globalScale * localScale)
+    end
+end
+
+-- 3. Register the plugin with GridCore
+local function RegisterWithGrid()
+    local GC = _G.RGridCore
+    if not (GC and GC.RegisterPlugin) then return end
+
+    GC:RegisterPlugin(PLUGIN_ID, {
+        name = "My Cool Plugin",
+        build = BuildOrGetFrame,
+        setScale = ApplyCustomScale,
+        default = {
+            gx = 0,
+            gy = -50,
+            group = 0,
+            label = "My Plugin",
+            showMode = "INHERIT",
+        },
+    })
+end
+
+-- 4. Initialize during PLAYER_LOGIN
+local f = CreateFrame("Frame")
+f:RegisterEvent("PLAYER_LOGIN")
+f:SetScript("OnEvent", function(self, event, ...)
+    if event == "PLAYER_LOGIN" then
+        RegisterWithGrid()
+    end
+end)
+
+
+Example plugin:
+
+-- RGridCore plugin: Player Name + Level (simple & safe)
+
+local PLUGIN_ID = "rgrid_player_info"
+local frame
+local registered = false
+
+------------------------------------------------
+-- Utils
+------------------------------------------------
+
+local function dbg(msg)
+    if DEFAULT_CHAT_FRAME then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff66ccff[rgrid_info]|r " .. tostring(msg))
+    end
+end
+
+------------------------------------------------
+-- Update
+------------------------------------------------
+
+local function UpdateInfo()
+    if not frame then return end
+
+    local name = UnitName("player") or "Unknown"
+    local level = UnitLevel("player") or "?"
+
+    frame.text:SetText(name .. "  (Lv " .. level .. ")")
+end
+
+------------------------------------------------
+-- Build
+------------------------------------------------
+
+local function Build()
+    if frame then return frame end
+
+    frame = CreateFrame("Frame", "RGrid_PlayerInfoFrame", UIParent)
+    frame:SetSize(200, 24)
+
+    -- Background
+    local bg = frame:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetColorTexture(0, 0, 0, 0.6)
+
+    -- Text
+    local txt = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    txt:SetPoint("CENTER")
+    txt:SetJustifyH("CENTER")
+
+    frame.text = txt
+
+    -- Events
+    frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+    frame:RegisterEvent("PLAYER_LEVEL_UP")
+    frame:RegisterEvent("UNIT_NAME_UPDATE")
+
+    frame:SetScript("OnEvent", function(_, event, arg1)
+        if event == "UNIT_NAME_UPDATE" and arg1 ~= "player" then
+            return
+        end
+        UpdateInfo()
+    end)
+
+    UpdateInfo()
+    dbg("Frame built")
+
+    return frame
+end
+
+------------------------------------------------
+-- Scale
+------------------------------------------------
+
+local function ApplyScale(f, s)
+    if f and f.SetScale then
+        f:SetScale(s or 1)
+    end
+end
+
+------------------------------------------------
+-- Register
+------------------------------------------------
+
+local function TryRegister()
+    if registered then return true end
+
+    local GC = _G.RGridCore
+    if not (GC and GC.RegisterPlugin and GC.AttachPlugin) then
+        return false
+    end
+
+    GC:RegisterPlugin(PLUGIN_ID, {
+        name = "Player Info",
+
+        build = Build,
+        setScale = ApplyScale,
+
+        default = {
+            gx = 0,
+            gy = -120,
+            group = 0,
+            label = "Info",
+            showMode = "INHERIT",
+        },
+    })
+
+    GC:AttachPlugin(PLUGIN_ID, true)
+
+    if GC.ReflowAll then
+        GC:ReflowAll("player_info_registered")
+    end
+
+    registered = true
+    dbg("Registered + attached")
+
+    return true
+end
+
+------------------------------------------------
+-- SSR-safe init
+------------------------------------------------
+
+local tries = 0
+
+local function Pump()
+    tries = tries + 1
+
+    if TryRegister() then return end
+
+    if tries == 1 then
+        dbg("Waiting for RGridCore...")
+    end
+
+    if tries < 50 then
+        C_Timer.After(0.2, Pump)
+    else
+        dbg("FAILED: RGridCore not found")
+    end
+end
+
+Pump()

@@ -1,0 +1,98 @@
+## Interface: 120001
+## Title: |cff00b3ffRobui|r
+## Notes: UI Suite for Midnight
+## Author: Roburmaster
+## Version: 0.7.5
+## SavedVariables: RobuiDB, RobUIGoldDB, Robuinp, SimpleOneBagDB, rbdb, RobUIBuffBarsDB, rbardb, QuickSellDB
+## SavedVariablesPerCharacter: XPROBDB
+## OptionalDeps: RobHeal
+
+
+Core.lua
+Database.lua
+MasterConfigUI.lua
+
+# Modules - ActionBars
+ActionBars\Skinner.lua
+ActionBars\Fader.lua
+Modules/NameplateManager.lua
+
+# Bottom Panel
+BPanel\BPanel.lua
+BPanel\SystemStats.lua
+BPanel\Durability.lua
+BPanel\Instance.lua
+BPanel\SpecLoot.lua
+BPanel\Gold.lua
+
+# Top Panel
+TPanel\TopPanel.lua
+
+# Class Resources (VIKTIG: Må lastes før UnitFrames)
+class\classbar_monk.lua
+class\classbar_rogue.lua
+class\classbar_druid.lua
+class\classbar_paladin.lua
+class\classbar_warlock.lua
+class\classbar_arcane.lua
+class\classbar_evoker.lua
+class\classbar_deathknight.lua
+class/classbar_shaman.lua
+class/classbar_demonhunter.lua
+# Unit Frames
+UI\UnitFrames.lua
+UI\PlayerFrame.lua
+UI\PlayerFrameSettings.lua
+UI\PipVisibility.lua
+UI\TargetFrame.lua
+UI\TargetFrameSettings.lua
+UI\TargetTarget.lua
+UI\TargetTargetSettings.lua
+UI\Focus.lua
+UI\FocusSettings.lua
+UI\Pet.lua
+UI\PetSettings.lua
+UI\AurasSettings.lua
+UI\Auras.lua
+
+# Tools
+UI\HideBlizzard.lua
+UI\RobInstall.lua
+
+# Data Sources (Lastes først så andre moduler finner data)
+
+
+
+# Core Modules
+Modules\AutoSell.lua
+Modules\AutoSellSettings.lua
+Modules\Castbar.lua
+Modules\Markers.lua
+Modules\FontManager.lua
+Modules\TooltipID.lua
+Modules/bagtweak.lua
+# Stats & Gear Modules
+Modules\LiveStats.lua
+Modules\CharacterStats.lua
+
+# Tweaks
+Tweaks\WindowMover.lua
+Tweaks\Minimap.lua
+Tweaks/escbutton.lua
+Tweaks/autokeystone.lua
+Modules/Integrations.lua
+
+
+
+combattool/buffbars.lua
+xptracker.lua
+wqtest.lua
+
+
+
+
+
+
+
+
+

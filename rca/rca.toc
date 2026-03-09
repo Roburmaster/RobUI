@@ -1,0 +1,15 @@
+## Interface: 120001
+## Title: RobUI Combat Assistant
+## Notes: Rotation assistant that plugs into RobUI Combat Grid (rgrid)
+## Author: Roburmaster
+## Version: 0.12
+
+## RequiredDeps: Robui, RobUI_CombatGrid
+
+SpellDB.lua
+KeyBinds.lua
+RCA_API.lua
+RCA_Scanner.lua
+RCA_Filter.lua
+RCA_Queue.lua
+Core.lua

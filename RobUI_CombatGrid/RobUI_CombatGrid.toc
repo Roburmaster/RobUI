@@ -1,0 +1,37 @@
+## Interface: 120001
+## Title: |cff00b3ffRobUI|r Combat Grid
+## Notes: Combat Grid module for RobUI (profiles + unified settings)
+## Author: Roburmaster
+## Version: 1.0.1
+## SavedVariables: RobUIGrid_GlobalDB, RobUIGridDB3, RobUIIncomingCastDB, RobUISetupDB
+## RequiredDeps: Robui
+
+
+ui/ptsettings.lua
+
+combatgrid/grid_core.lua
+combatgrid/grid_anchors.lua
+combatgrid/grid_ssr.lua
+combatgrid/grid_ui.lua
+
+ui/player.lua
+ui/target.lua
+ui/resourcebar.lua
+ui/resourcebar_settings.lua
+ui/trinkets.lua
+ui/AurasSettings_v2.lua
+ui/Auras_v2.lua
+ui/inccast.lua
+ui/dhbar.lua
+
+classbar/1classbar_arcane.lua
+classbar/1classbar_deathknight.lua
+classbar/1classbar_druid.lua
+classbar/1classbar_evoker.lua
+classbar/1classbar_monk.lua
+classbar/1classbar_paladin.lua
+classbar/1classbar_rogue.lua
+classbar/1classbar_warlock.lua
+core/driver.lua
+ce.lua
+override.lua
