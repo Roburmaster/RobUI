@@ -4,6 +4,8 @@ All notable changes to RobUI will be documented in this file.
 
 The format follows a simplified Keep a Changelog style.
 
+## v0.7.83
+coming
 ---
 
 ## 0.7.8 – Initial Public Repository
