@@ -1,0 +1,16 @@
+# Linux
+.directory
+*~
+
+# Kate / KDE
+*.swp
+*.swo
+*.kate-swp
+
+# Temp
+*.tmp
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db
