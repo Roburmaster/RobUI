@@ -19,7 +19,7 @@ jobs:
       - name: Upload to CurseForge
         uses: itsmeow/curseforge-upload@v3
         with:
-          token: ${{ secrets.CF_API_KEY }}
+          token: ${{ secrets.CURSEFORGE }}
           project_id: "1420778"
           file_path: RobUI.zip
           game_endpoint: wow
