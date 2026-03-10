@@ -14,12 +14,16 @@ jobs:
 
       - name: Create Addon Zip
         run: |
-          zip -r RobUI.zip Robui RobUI_CombatGrid rca
+          zip -r RobUI.zip RobUI_CombatGrid Robui rca
 
       - name: Upload to CurseForge
         uses: itsmeow/curseforge-upload@v3
         with:
           token: ${{ secrets.CURSEFORGE }}
           project_id: "1420778"
-          file_path: RobUI.zip
           game_endpoint: wow
+          file_path: RobUI.zip
+          release_type: release
+          display_name: RobUI ${{ github.event.release.tag_name }}
+          changelog: ${{ github.event.release.body }}
+          changelog_type: markdown
