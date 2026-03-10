@@ -22,34 +22,28 @@ local DEFAULTS = {
     powerH = 10,
     gap = 4,
 
-    -- Elements
     showName = true,
     showHPText = true,
     showPowerText = true,
     showPower = true,
 
-    -- Fonts
     nameSize = 12,
     hpSize = 11,
     powerSize = 10,
 
-    -- Offsets
     nameOffX = 0, nameOffY = 0,
     hpOffX = 0,   hpOffY = 0,
     powOffX = 0,  powOffY = 0,
 
-    -- Text Colors
     nameR=1, nameG=1, nameB=1,
     hpTextR=1, hpTextG=1, hpTextB=1,
     powTextR=1, powTextG=1, powTextB=1,
 
-    -- Skinning
     useTexture = true,
     baseTexturePath = "Interface\\AddOns\\"..AddonName.."\\media\\base.tga",
     noColorOverride = true,
     tintOnlyOnBase  = true,
 
-    -- Fallback tint
     useCustomHP = false,
     hpR=0.2, hpG=0.8, hpB=0.2,
 
@@ -57,7 +51,6 @@ local DEFAULTS = {
     powR=0.2, powG=0.4, powB=1.0,
 }
 
--- Database Helper
 local function GetCfg()
     if R and R.Database and R.Database.profile and R.Database.profile.unitframes and R.Database.profile.unitframes.pet then
         return R.Database.profile.unitframes.pet
@@ -65,10 +58,17 @@ local function GetCfg()
     return DEFAULTS
 end
 
+local function GetScale()
+    if R and R.GetMainUnitFrameScale then
+        return R:GetMainUnitFrameScale()
+    end
+    return 1
+end
+
 P.Defaults = DEFAULTS
 
 -- ------------------------------------------------------------
--- 2) HELPERS (secret-safe + low GC)
+-- 2) HELPERS
 -- ------------------------------------------------------------
 local function issecret(v)
     if type(_G.issecretvalue) == "function" then
@@ -164,7 +164,6 @@ local function IsVehicleStateActive()
     return false
 end
 
--- secret-safe cached SetText (avoids spam)
 local function SafeSetText(self, key, fs, txt)
     if not fs or not fs.SetText then return end
     if txt == nil then txt = "" end
@@ -189,7 +188,7 @@ local function SafeSetText(self, key, fs, txt)
 end
 
 -- ------------------------------------------------------------
--- 3) TEXTURE MAPPING (pet uses NPC textures)
+-- 3) TEXTURE MAPPING
 -- ------------------------------------------------------------
 local MEDIA = "Interface\\AddOns\\"..AddonName.."\\media\\"
 local NPC_TEXTURES = {
@@ -229,7 +228,7 @@ local function GetSkinInfo()
 end
 
 -- ------------------------------------------------------------
--- 4) STYLE (NO string skinKey churn)
+-- 4) STYLE
 -- ------------------------------------------------------------
 P.__last = P.__last or {}
 
@@ -329,7 +328,6 @@ P.__driverApplied = false
 P.__pendingDriver = false
 
 local function ApplySecureVisibility()
-    if not P.root then return end
     local cfg = GetCfg()
 
     if InCombatLockdown() then
@@ -338,27 +336,33 @@ local function ApplySecureVisibility()
     end
     P.__pendingDriver = false
 
+    if P.holder and P.__driverApplied and UnregisterStateDriver then
+        pcall(UnregisterStateDriver, P.holder)
+        P.__driverApplied = false
+    end
+
+    if not P.holder then return end
+
     if not RegisterStateDriver then
-        if cfg.shown and UnitExists(UNIT) and not IsVehicleStateActive() then
-            P.root:Show()
-        else
-            P.root:Hide()
+        local show = cfg.shown and UnitExists(UNIT) and not IsVehicleStateActive()
+        P.holder:SetShown(show and true or false)
+        if P.anchor then
+            P.anchor:SetShown(show and true or false)
         end
         return
     end
 
-    if P.__driverApplied and UnregisterStateDriver then
-        pcall(UnregisterStateDriver, P.root)
-        P.__driverApplied = false
-    end
-
     if cfg.shown then
-        pcall(RegisterStateDriver, P.root, "visibility", "[vehicleui][overridebar][possessbar] hide; [@pet,exists] show; hide")
+        pcall(RegisterStateDriver, P.holder, "visibility", "[vehicleui][overridebar][possessbar] hide; [@pet,exists] show; hide")
     else
-        pcall(RegisterStateDriver, P.root, "visibility", "hide")
+        pcall(RegisterStateDriver, P.holder, "visibility", "hide")
     end
 
     P.__driverApplied = true
+
+    if P.anchor then
+        P.anchor:SetShown(cfg.shown and true or false)
+    end
 end
 
 -- ------------------------------------------------------------
@@ -397,7 +401,7 @@ function P:RequestLayout()
 end
 
 -- ------------------------------------------------------------
--- 7.5) LIGHT TICKER (pet can be flaky; keep it stable)
+-- 7.5) LIGHT TICKER
 -- ------------------------------------------------------------
 P.__ticker = P.__ticker or nil
 function P:StartTicker()
@@ -439,12 +443,25 @@ function P:Initialize()
     if self.root then return end
     local cfg = GetCfg()
 
-    local root = CreateFrame("Frame", "RobUI_PetFrame", UIParent, "BackdropTemplate")
+    local anchor = CreateFrame("Frame", "RobUI_PetFrameAnchor", UIParent, "BackdropTemplate")
+    self.anchor = anchor
+    anchor:SetSize(1, 1)
+    anchor:SetClampedToScreen(true)
+    anchor:SetMovable(true)
+    anchor:EnableMouse(true)
+    anchor:RegisterForDrag("LeftButton")
+
+    local holder = CreateFrame("Frame", "RobUI_PetFrameHolder", UIParent, "BackdropTemplate")
+    self.holder = holder
+    holder:SetClampedToScreen(true)
+
+    if R then
+        R.PetFrame = holder
+    end
+
+    local root = CreateFrame("Frame", "RobUI_PetFrame", holder, "BackdropTemplate")
     self.root = root
-    root:SetClampedToScreen(true)
-    root:SetMovable(true)
-    root:EnableMouse(true)
-    root:RegisterForDrag("LeftButton")
+    root:SetAllPoints(holder)
 
     local click = CreateFrame("Button", nil, root, "SecureUnitButtonTemplate")
     self.click = click
@@ -460,27 +477,32 @@ function P:Initialize()
         local c = GetCfg()
         if c.locked then return end
         if not IsShiftKeyDown() then return end
-        root:StartMoving()
+        anchor:StartMoving()
     end
 
     local function StopMove()
         if InCombatLockdown() then return end
-        root:StopMovingOrSizing()
+        anchor:StopMovingOrSizing()
+
         local c = GetCfg()
-        local p, _, rp, x, y = root:GetPoint(1)
-        c.point, c.relPoint, c.x, c.y = p, rp, math.floor((x or 0)+0.5), math.floor((y or 0)+0.5)
+        local p, _, rp, x, y = anchor:GetPoint(1)
+
+        c.point = p or "CENTER"
+        c.relPoint = rp or "CENTER"
+        c.x = math.floor((x or 0) + 0.5)
+        c.y = math.floor((y or 0) + 0.5)
+
         P:RequestLayout()
         if ns.UnitFrames.Pet.Settings and ns.UnitFrames.Pet.Settings.RefreshIfOpen then
             ns.UnitFrames.Pet.Settings.RefreshIfOpen()
         end
     end
 
-    root:SetScript("OnDragStart", StartMove)
-    root:SetScript("OnDragStop", StopMove)
+    anchor:SetScript("OnDragStart", StartMove)
+    anchor:SetScript("OnDragStop", StopMove)
     click:SetScript("OnDragStart", StartMove)
     click:SetScript("OnDragStop", StopMove)
 
-    -- Bars
     local hp = CreateFrame("StatusBar", nil, root, "BackdropTemplate")
     self.hp = hp
     EnsureBackdrop(hp, 0.0)
@@ -500,7 +522,6 @@ function P:Initialize()
     powBg:SetColorTexture(0.1, 0.1, 0.1, 0.9)
     pow.bg = powBg
 
-    -- Text
     self.nameText = hp:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     self.hpText   = hp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     self.powText  = pow:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -509,7 +530,6 @@ function P:Initialize()
     RegFont(self.hpText, cfg.hpSize, "OUTLINE")
     RegFont(self.powText, cfg.powerSize, "OUTLINE")
 
-    -- caches
     self._lastNameText = nil
     self._lastHPText = nil
     self._lastPowText = nil
@@ -529,16 +549,12 @@ end
 -- 10) LAYOUT
 -- ------------------------------------------------------------
 function P:ApplyLayout()
-    if not self.root then return end
+    if not self.root or not self.holder or not self.anchor then return end
     local cfg = GetCfg()
+    local scale = GetScale()
 
-    local root = self.root
-    root:ClearAllPoints()
-    if cfg.point then
-        root:SetPoint(cfg.point, UIParent, cfg.relPoint, cfg.x, cfg.y)
-    else
-        root:SetPoint("CENTER", UIParent, "CENTER", -540, 60)
-    end
+    local anchor = self.anchor
+    local holder = self.holder
 
     local w    = Clamp(cfg.w, 140, 900)
     local hpH  = Clamp(cfg.hpH, 10, 60)
@@ -549,11 +565,25 @@ function P:ApplyLayout()
     local totalH = hpH
     if showPower then totalH = totalH + gap + powH end
 
-    root:SetSize(w, totalH)
+    anchor:ClearAllPoints()
+    anchor:SetPoint(
+        cfg.point or "CENTER",
+        UIParent,
+        cfg.relPoint or "CENTER",
+        cfg.x or -540,
+        cfg.y or 60
+    )
+
+    holder:ClearAllPoints()
+    holder:SetPoint("TOPLEFT", anchor, "TOPLEFT", 0, 0)
+    holder:SetScale(scale or 1)
+    holder:SetSize(w, totalH)
+
+    self.root:SetAllPoints(holder)
 
     self.hp:ClearAllPoints()
-    self.hp:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
-    self.hp:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, 0)
+    self.hp:SetPoint("TOPLEFT", self.root, "TOPLEFT", 0, 0)
+    self.hp:SetPoint("TOPRIGHT", self.root, "TOPRIGHT", 0, 0)
     self.hp:SetHeight(hpH)
 
     if showPower then
@@ -593,7 +623,7 @@ function P:ApplyLayout()
 end
 
 -- ------------------------------------------------------------
--- 11) UPDATE VALUES (no heal prediction / no shields)
+-- 11) UPDATE VALUES
 -- ------------------------------------------------------------
 function P:UpdateAll()
     if not self.root then return end
@@ -626,7 +656,6 @@ function P:UpdateAll()
 
     SafeSetText(self, "_lastNameText", self.nameText, UnitName(UNIT) or "")
 
-    -- HP
     local hCur = UnitHealth(UNIT)
     local hMax = UnitHealthMax(UNIT)
 
@@ -653,7 +682,6 @@ function P:UpdateAll()
         end
     end
 
-    -- POWER
     local pCur = UnitPower(UNIT)
     local pMax = UnitPowerMax(UNIT)
 
@@ -807,7 +835,6 @@ SlashCmdList.TPETSET = function()
     P:ToggleSettings()
 end
 
--- Optional profiler hooks
 if PROF and PROF.Wrap then
     P.UpdateAll   = PROF:Wrap("UF:Pet", "UpdateAll", P.UpdateAll)
     P.ApplyLayout = PROF:Wrap("UF:Pet", "ApplyLayout", P.ApplyLayout)
