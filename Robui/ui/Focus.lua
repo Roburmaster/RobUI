@@ -76,6 +76,13 @@ local function GetCfg()
     return DEFAULTS
 end
 
+local function GetScale()
+    if R and R.GetMainUnitFrameScale then
+        return R:GetMainUnitFrameScale()
+    end
+    return 1
+end
+
 F.Defaults = DEFAULTS
 
 -- ============================================================
@@ -102,7 +109,6 @@ end
 local function IsSafeNumber(v) return type(v) == "number" and not issecret(v) end
 local function IsSafePositive(v) return IsSafeNumber(v) and v > 0 end
 
--- allow secret numbers for BAR FILL (no comparisons), but NOT for text/math.
 local function IsNumberAny(v) return type(v) == "number" end
 local function IsPositiveAny(v)
     if type(v) ~= "number" then return false end
@@ -289,7 +295,7 @@ local function EnsureHealCalc()
 end
 
 -- ============================================================
--- 5) STYLE + OVERLAY ANCHORS (secret-safe cache)
+-- 5) STYLE + OVERLAY ANCHORS
 -- ============================================================
 F.__lastSkinKey = nil
 
@@ -343,7 +349,6 @@ local function ApplyHPStyle(force)
         if tex.SetVertTile then tex:SetVertTile(false) end
     end
 
-    -- overlays follow texture edge
     ReanchorOverlays()
 
     local forceWhite = false
@@ -408,7 +413,6 @@ F.__driverApplied = false
 F.__pendingDriver = false
 
 local function ApplySecureVisibility()
-    if not F.root then return end
     local cfg = GetCfg()
 
     if InCombatLockdown() then
@@ -417,20 +421,32 @@ local function ApplySecureVisibility()
     end
     F.__pendingDriver = false
 
-    if not RegisterStateDriver then return end
-
-    if F.__driverApplied and UnregisterStateDriver then
-        pcall(UnregisterStateDriver, F.root)
+    if F.holder and F.__driverApplied and UnregisterStateDriver then
+        pcall(UnregisterStateDriver, F.holder)
         F.__driverApplied = false
     end
 
+    if not F.holder then return end
+
+    if not RegisterStateDriver then
+        F.holder:SetShown(cfg.shown and true or false)
+        if F.anchor then
+            F.anchor:SetShown(cfg.shown and true or false)
+        end
+        return
+    end
+
     if cfg.shown then
-        pcall(RegisterStateDriver, F.root, "visibility", "[@focus,exists] show; hide")
+        pcall(RegisterStateDriver, F.holder, "visibility", "[@focus,exists] show; hide")
     else
-        pcall(RegisterStateDriver, F.root, "visibility", "hide")
+        pcall(RegisterStateDriver, F.holder, "visibility", "hide")
     end
 
     F.__driverApplied = true
+
+    if F.anchor then
+        F.anchor:SetShown(cfg.shown and true or false)
+    end
 end
 
 -- ============================================================
@@ -483,12 +499,25 @@ function F:Initialize()
     if self.root then return end
     local cfg = GetCfg()
 
-    local root = CreateFrame("Frame", "RobUI_FocusFrame", UIParent, "BackdropTemplate")
+    local anchor = CreateFrame("Frame", "RobUI_FocusFrameAnchor", UIParent, "BackdropTemplate")
+    self.anchor = anchor
+    anchor:SetSize(1, 1)
+    anchor:SetClampedToScreen(true)
+    anchor:SetMovable(true)
+    anchor:EnableMouse(true)
+    anchor:RegisterForDrag("LeftButton")
+
+    local holder = CreateFrame("Frame", "RobUI_FocusFrameHolder", UIParent, "BackdropTemplate")
+    self.holder = holder
+    holder:SetClampedToScreen(true)
+
+    if R then
+        R.FocusFrame = holder
+    end
+
+    local root = CreateFrame("Frame", "RobUI_FocusFrame", holder, "BackdropTemplate")
     self.root = root
-    root:SetClampedToScreen(true)
-    root:SetMovable(true)
-    root:EnableMouse(true)
-    root:RegisterForDrag("LeftButton")
+    root:SetAllPoints(holder)
 
     local click = CreateFrame("Button", nil, root, "SecureUnitButtonTemplate")
     self.click = click
@@ -504,15 +533,21 @@ function F:Initialize()
         local c = GetCfg()
         if c.locked then return end
         if not IsShiftKeyDown() then return end
-        root:StartMoving()
+        anchor:StartMoving()
     end
 
     local function StopMove()
         if InCombatLockdown() then return end
-        root:StopMovingOrSizing()
+        anchor:StopMovingOrSizing()
+
         local c = GetCfg()
-        local p, _, rp, x, y = root:GetPoint(1)
-        c.point, c.relPoint, c.x, c.y = p, rp, math.floor((x or 0)+0.5), math.floor((y or 0)+0.5)
+        local p, _, rp, x, y = anchor:GetPoint(1)
+
+        c.point = p or "CENTER"
+        c.relPoint = rp or "CENTER"
+        c.x = math.floor((x or 0) + 0.5)
+        c.y = math.floor((y or 0) + 0.5)
+
         F:RequestLayout()
 
         if ns.UnitFrames.Focus.Settings and ns.UnitFrames.Focus.Settings.RefreshIfOpen then
@@ -520,12 +555,11 @@ function F:Initialize()
         end
     end
 
-    root:SetScript("OnDragStart", StartMove)
-    root:SetScript("OnDragStop", StopMove)
+    anchor:SetScript("OnDragStart", StartMove)
+    anchor:SetScript("OnDragStop", StopMove)
     click:SetScript("OnDragStart", StartMove)
     click:SetScript("OnDragStop", StopMove)
 
-    -- Bars
     local hp = CreateFrame("StatusBar", nil, root, "BackdropTemplate")
     self.hp = hp
     EnsureBackdrop(hp, 0.0)
@@ -545,7 +579,6 @@ function F:Initialize()
     powBg:SetColorTexture(0.1, 0.1, 0.1, 0.9)
     pow.bg = powBg
 
-    -- Overlays
     local clip = CreateFrame("Frame", nil, hp)
     self.clipFrame = clip
     clip:SetAllPoints(hp)
@@ -575,7 +608,6 @@ function F:Initialize()
     healAbs:SetFrameLevel(hp:GetFrameLevel() + 3)
     shield:SetFrameLevel(hp:GetFrameLevel() + 4)
 
-    -- Text
     self.nameText = hp:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     self.hpText   = hp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     self.powText  = pow:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -584,7 +616,6 @@ function F:Initialize()
     RegFont(self.hpText, cfg.hpSize, "OUTLINE")
     RegFont(self.powText, cfg.powerSize, "OUTLINE")
 
-    -- caches
     self._lastNameText = nil
     self._lastHPText = nil
     self._lastPowText = nil
@@ -606,16 +637,12 @@ end
 -- 11) LAYOUT
 -- ============================================================
 function F:ApplyLayout()
-    if not self.root then return end
+    if not self.root or not self.holder or not self.anchor then return end
     local cfg = GetCfg()
+    local scale = GetScale()
 
-    local root = self.root
-    root:ClearAllPoints()
-    if cfg.point then
-        root:SetPoint(cfg.point, UIParent, cfg.relPoint, cfg.x, cfg.y)
-    else
-        root:SetPoint("CENTER", UIParent, "CENTER", 540, 120)
-    end
+    local anchor = self.anchor
+    local holder = self.holder
 
     local w    = Clamp(cfg.w, 140, 900)
     local hpH  = Clamp(cfg.hpH, 10, 60)
@@ -626,11 +653,25 @@ function F:ApplyLayout()
     local totalH = hpH
     if showPower then totalH = totalH + gap + powH end
 
-    root:SetSize(w, totalH)
+    anchor:ClearAllPoints()
+    anchor:SetPoint(
+        cfg.point or "CENTER",
+        UIParent,
+        cfg.relPoint or "CENTER",
+        cfg.x or 540,
+        cfg.y or 120
+    )
+
+    holder:ClearAllPoints()
+    holder:SetPoint("TOPLEFT", anchor, "TOPLEFT", 0, 0)
+    holder:SetScale(scale or 1)
+    holder:SetSize(w, totalH)
+
+    self.root:SetAllPoints(holder)
 
     self.hp:ClearAllPoints()
-    self.hp:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
-    self.hp:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, 0)
+    self.hp:SetPoint("TOPLEFT", self.root, "TOPLEFT", 0, 0)
+    self.hp:SetPoint("TOPRIGHT", self.root, "TOPRIGHT", 0, 0)
     self.hp:SetHeight(hpH)
 
     if showPower then
@@ -673,13 +714,12 @@ function F:ApplyLayout()
     ApplyPowerColor()
     ReanchorOverlays()
 
-    -- reset max caches (safe)
     self._lastHMax = nil
     self._lastPMax = nil
 end
 
 -- ============================================================
--- 12) LIGHT UPDATE (HP/Power/Text) - NO overlay math
+-- 12) LIGHT UPDATE (HP/Power/Text)
 -- ============================================================
 function F:UpdateAll()
     if not self.root then return end
@@ -700,7 +740,6 @@ function F:UpdateAll()
 
     SafeSetText(self, "_lastNameText", self.nameText, UnitName(UNIT) or "")
 
-    -- HP
     local hCur = UnitHealth(UNIT)
     local hMax = UnitHealthMax(UNIT)
 
@@ -727,7 +766,6 @@ function F:UpdateAll()
         end
     end
 
-    -- POWER
     local pCur = UnitPower(UNIT)
     local pMax = UnitPowerMax(UNIT)
 
@@ -756,7 +794,7 @@ function F:UpdateAll()
 end
 
 -- ============================================================
--- 12.5) HEAVY UPDATE (incoming/healabsorb/absorb) - event only
+-- 12.5) HEAVY UPDATE (incoming/healabsorb/absorb)
 -- ============================================================
 function F:UpdateHealPred(force)
     if not self.root or not UnitExists(UNIT) then
@@ -938,9 +976,8 @@ SlashCmdList.TFOCUSSET = function()
     F:ToggleSettings()
 end
 
--- Optional profiler hooks
 if PROF and PROF.Wrap then
-    F.UpdateAll     = PROF:Wrap("UF:Focus", "UpdateAll", F.UpdateAll)
-    F.ApplyLayout   = PROF:Wrap("UF:Focus", "ApplyLayout", F.ApplyLayout)
+    F.UpdateAll      = PROF:Wrap("UF:Focus", "UpdateAll", F.UpdateAll)
+    F.ApplyLayout    = PROF:Wrap("UF:Focus", "ApplyLayout", F.ApplyLayout)
     F.UpdateHealPred = PROF:Wrap("UF:Focus", "UpdateHealPred", F.UpdateHealPred)
 end
