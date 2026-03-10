@@ -8,16 +8,14 @@
 --       * Hide this custom player frame when WoW takes over control:
 --         [vehicleui] [overridebar] [possessbar]
 --
--- RULES USED:
---   ✅ NEVER compare any strings that might be secret (no prev-text caching, no ~= checks).
---   ✅ Always generate text from numbers and set it directly.
---   ✅ Do NOT blank text just because something "might be secret".
---
 -- Event-driven, no ticker.
 -- Overlays update only on heal/absorb events.
 -- Pips rebuild deferred.
+-- Anchor + holder positioning:
+--   - anchor = unscaled frame that stores/moves position
+--   - holder = scaled wrapper anchored to anchor
+--   - root   = frame content inside holder
 -- ============================================================================
-
 local AddonName, ns = ...
 local R = _G.Robui
 
@@ -50,7 +48,6 @@ local UnitClass = UnitClass
 local UnitGetDetailedHealPrediction = UnitGetDetailedHealPrediction
 local UnitGetTotalAbsorbs = UnitGetTotalAbsorbs
 
--- PowerType constants
 local POW_MANA = (Enum and Enum.PowerType and Enum.PowerType.Mana) or 0
 
 -- ============================================================
@@ -139,8 +136,15 @@ local function GetCfg()
     return DEFAULTS
 end
 
+local function GetScale()
+    if R and R.GetMainUnitFrameScale then
+        return R:GetMainUnitFrameScale()
+    end
+    return 1
+end
+
 -- ============================================================
--- SECRET HELPER (only used where we must compare)
+-- SECRET HELPER
 -- ============================================================
 local function issecret(v)
     if type(_G.issecretvalue) == "function" then
@@ -171,7 +175,6 @@ local function EnsureBackdrop(f, alpha)
     f:SetBackdropBorderColor(0,0,0,1)
 end
 
--- IMPORTANT: no prev-text caching, no compares, just set
 local function SafeSetText(fs, txt)
     if not fs or not fs.SetText then return end
     if txt == nil then txt = "" end
@@ -186,7 +189,6 @@ local function SafeSetFont(fs, path, size, flags)
     pcall(fs.SetFont, fs, path, size, flags)
 end
 
--- Same mechanism as TargetFrame
 local function RegFont(fs, size, flags)
     local M = ns and ns.media
     if M and M.RegisterTarget and fs then
@@ -198,7 +200,7 @@ local function RegFont(fs, size, flags)
 end
 
 -- ============================================================
--- TEXT FORMAT (HP + POWER) - ALWAYS SHOW, NO STRING COMPARES
+-- TEXT FORMAT
 -- ============================================================
 local function AbbrevAlways(v)
     if type(v) ~= "number" then return "" end
@@ -235,7 +237,7 @@ local function GetClassColorRGB()
 end
 
 -- ============================================================
--- PRIMARY POWER TYPE (fixed)
+-- PRIMARY POWER TYPE
 -- ============================================================
 local function GetPrimaryPowerType()
     local pType = UnitPowerType("player")
@@ -327,7 +329,7 @@ local function RebuildPips(self)
 end
 
 -- ============================================================
--- STYLE (avoid secret-string compare)
+-- STYLE
 -- ============================================================
 local function ApplyHPStyle()
     if not PF.hp then return end
@@ -415,14 +417,13 @@ local function ReanchorOverlays()
 end
 
 -- ============================================================
--- VISIBILITY (secure driver)  +  HIDE DURING VEHICLE/OVERRIDE
+-- VISIBILITY
 -- ============================================================
 PF.__driverApplied = false
 PF.__pendingDriver = false
 PF.__pendingLayout = false
 
 local function ApplySecureVisibility()
-    if not PF.root then return end
     local cfg = GetCfg()
 
     if InCombatLockdown() then
@@ -431,26 +432,33 @@ local function ApplySecureVisibility()
     end
     PF.__pendingDriver = false
 
-    if not RegisterStateDriver then
-        PF.root:SetShown(cfg.shown and true or false)
-        return
-    end
-
-    if PF.__driverApplied and UnregisterStateDriver then
-        pcall(UnregisterStateDriver, PF.root)
+    if PF.holder and PF.__driverApplied and UnregisterStateDriver then
+        pcall(UnregisterStateDriver, PF.holder)
         PF.__driverApplied = false
     end
 
+    if not PF.holder then return end
+
+    if not RegisterStateDriver then
+        PF.holder:SetShown(cfg.shown and true or false)
+        if PF.anchor then
+            PF.anchor:SetShown(cfg.shown and true or false)
+        end
+        return
+    end
+
     if cfg.shown then
-        -- IMPORTANT: Let Blizzard show its standard vehicle/override/possess UI
-        -- Hide our custom player frame whenever those bars are active.
         local cond = "[vehicleui][overridebar][possessbar] hide; show"
-        pcall(RegisterStateDriver, PF.root, "visibility", cond)
+        pcall(RegisterStateDriver, PF.holder, "visibility", cond)
     else
-        pcall(RegisterStateDriver, PF.root, "visibility", "hide")
+        pcall(RegisterStateDriver, PF.holder, "visibility", "hide")
     end
 
     PF.__driverApplied = true
+
+    if PF.anchor then
+        PF.anchor:SetShown(cfg.shown and true or false)
+    end
 end
 
 function PF:RequestLayout()
@@ -463,7 +471,7 @@ function PF:RequestLayout()
 end
 
 -- ============================================================
--- DEFERRED REFRESH (spec/power not always ready at login)
+-- DEFERRED REFRESH
 -- ============================================================
 PF.__deferToken = PF.__deferToken or 0
 local function DeferRefresh()
@@ -508,12 +516,25 @@ end
 function PF:Initialize()
     if self.root then return end
 
-    local root = CreateFrame("Frame", "RobUI_PlayerFrame", UIParent, "BackdropTemplate")
+    local anchor = CreateFrame("Frame", "RobUI_PlayerFrameAnchor", UIParent, "BackdropTemplate")
+    self.anchor = anchor
+    anchor:SetSize(1, 1)
+    anchor:SetClampedToScreen(true)
+    anchor:SetMovable(true)
+    anchor:EnableMouse(true)
+    anchor:RegisterForDrag("LeftButton")
+
+    local holder = CreateFrame("Frame", "RobUI_PlayerFrameHolder", UIParent, "BackdropTemplate")
+    self.holder = holder
+    holder:SetClampedToScreen(true)
+
+    if R then
+        R.PlayerFrame = holder
+    end
+
+    local root = CreateFrame("Frame", "RobUI_PlayerFrame", holder, "BackdropTemplate")
     self.root = root
-    root:SetClampedToScreen(true)
-    root:SetMovable(true)
-    root:EnableMouse(true)
-    root:RegisterForDrag("LeftButton")
+    root:SetAllPoints(holder)
 
     local click = CreateFrame("Button", nil, root, "SecureUnitButtonTemplate")
     self.click = click
@@ -529,15 +550,21 @@ function PF:Initialize()
         local c = GetCfg()
         if c.locked then return end
         if not IsShiftKeyDown() then return end
-        root:StartMoving()
+        anchor:StartMoving()
     end
 
     local function StopMove()
         if InCombatLockdown() then return end
-        root:StopMovingOrSizing()
+        anchor:StopMovingOrSizing()
+
         local c = GetCfg()
-        local p, _, rp, x, y = root:GetPoint(1)
-        c.point, c.relPoint, c.x, c.y = p, rp, floor((x or 0)+0.5), floor((y or 0)+0.5)
+        local p, _, rp, x, y = anchor:GetPoint(1)
+
+        c.point = p or "CENTER"
+        c.relPoint = rp or "CENTER"
+        c.x = floor((x or 0) + 0.5)
+        c.y = floor((y or 0) + 0.5)
+
         PF:RequestLayout()
 
         if ns.UnitFrames.Player.Settings and ns.UnitFrames.Player.Settings.RefreshIfOpen then
@@ -545,18 +572,16 @@ function PF:Initialize()
         end
     end
 
-    root:SetScript("OnDragStart", StartMove)
-    root:SetScript("OnDragStop", StopMove)
+    anchor:SetScript("OnDragStart", StartMove)
+    anchor:SetScript("OnDragStop", StopMove)
     click:SetScript("OnDragStart", StartMove)
     click:SetScript("OnDragStop", StopMove)
 
-    -- Pips
     local pips = CreateFrame("Frame", "RobUI_PlayerPips", root, "BackdropTemplate")
     self.pips = pips
     EnsureBackdrop(pips, 0.0)
     pips:SetScript("OnSizeChanged", function() RebuildPips(self) end)
 
-    -- HP
     local hp = CreateFrame("StatusBar", nil, root, "BackdropTemplate")
     self.hp = hp
     EnsureBackdrop(hp, 0.0)
@@ -566,7 +591,6 @@ function PF:Initialize()
     hpBg:SetColorTexture(0.1, 0.1, 0.1, 0.9)
     hp.bg = hpBg
 
-    -- Power
     local pow = CreateFrame("StatusBar", nil, root, "BackdropTemplate")
     self.power = pow
     EnsureBackdrop(pow, 0.0)
@@ -577,7 +601,6 @@ function PF:Initialize()
     powBg:SetColorTexture(0.1, 0.1, 0.1, 0.9)
     pow.bg = powBg
 
-    -- Overlays (clip to HP)
     local clip = CreateFrame("Frame", nil, hp)
     self.clipFrame = clip
     clip:SetAllPoints(hp)
@@ -607,7 +630,6 @@ function PF:Initialize()
     healAbs:SetFrameLevel(hp:GetFrameLevel() + 3)
     shield:SetFrameLevel(hp:GetFrameLevel() + 4)
 
-    -- Text
     self.nameText = hp:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     self.hpText   = hp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     self.powText  = pow:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -616,7 +638,6 @@ function PF:Initialize()
     if self.hpText.SetDrawLayer then self.hpText:SetDrawLayer("OVERLAY", 7) end
     if self.powText.SetDrawLayer then self.powText:SetDrawLayer("OVERLAY", 7) end
 
-    -- Register with media system (same as TargetFrame)
     local cfg = GetCfg()
     RegFont(self.nameText, Clamp(cfg.nameSize, 8, 28), "OUTLINE")
     RegFont(self.hpText,   Clamp(cfg.hpSize, 8, 28),   "OUTLINE")
@@ -635,16 +656,12 @@ end
 -- LAYOUT
 -- ============================================================
 function PF:ApplyLayout()
-    if not self.root then return end
+    if not self.root or not self.holder or not self.anchor then return end
     local cfg = GetCfg()
+    local scale = GetScale()
 
-    local root = self.root
-    root:ClearAllPoints()
-    if cfg.point then
-        root:SetPoint(cfg.point, UIParent, cfg.relPoint, cfg.x, cfg.y)
-    else
-        root:SetPoint("CENTER", UIParent, "CENTER", -280, 120)
-    end
+    local anchor = self.anchor
+    local holder = self.holder
 
     local w    = Clamp(cfg.w, 140, 900)
     local hpH  = Clamp(cfg.hpH, 10, 60)
@@ -659,12 +676,26 @@ function PF:ApplyLayout()
     if showPips  then totalH = totalH + gap + pipH end
     if showPower then totalH = totalH + gap + powH end
 
-    root:SetSize(w, totalH)
+    anchor:ClearAllPoints()
+    anchor:SetPoint(
+        cfg.point or "CENTER",
+        UIParent,
+        cfg.relPoint or "CENTER",
+        cfg.x or -280,
+        cfg.y or 120
+    )
+
+    holder:ClearAllPoints()
+    holder:SetPoint("TOPLEFT", anchor, "TOPLEFT", 0, 0)
+    holder:SetScale(scale or 1)
+    holder:SetSize(w, totalH)
+
+    self.root:SetAllPoints(holder)
 
     if showPips then
         self.pips:ClearAllPoints()
-        self.pips:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
-        self.pips:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, 0)
+        self.pips:SetPoint("TOPLEFT", self.root, "TOPLEFT", 0, 0)
+        self.pips:SetPoint("TOPRIGHT", self.root, "TOPRIGHT", 0, 0)
         self.pips:SetHeight(pipH)
         self.pips:Show()
     else
@@ -676,8 +707,8 @@ function PF:ApplyLayout()
         self.hp:SetPoint("TOPLEFT", self.pips, "BOTTOMLEFT", 0, -gap)
         self.hp:SetPoint("TOPRIGHT", self.pips, "BOTTOMRIGHT", 0, -gap)
     else
-        self.hp:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
-        self.hp:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, 0)
+        self.hp:SetPoint("TOPLEFT", self.root, "TOPLEFT", 0, 0)
+        self.hp:SetPoint("TOPRIGHT", self.root, "TOPRIGHT", 0, 0)
     end
     self.hp:SetHeight(hpH)
 
@@ -725,7 +756,7 @@ function PF:ApplyLayout()
 end
 
 -- ============================================================
--- LIGHT UPDATE (hp/power/text) - ALWAYS SHOW TEXT
+-- LIGHT UPDATE
 -- ============================================================
 function PF:UpdateAll()
     if not self.root then return end
@@ -781,7 +812,7 @@ function PF:UpdateAll()
 end
 
 -- ============================================================
--- HEAVY UPDATE (incoming/healabsorb/absorb) - event only
+-- HEAVY UPDATE
 -- ============================================================
 function PF:UpdateHealPred(force)
     if not self.root then return end
