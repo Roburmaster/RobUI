@@ -28,39 +28,32 @@ local DEFAULTS = {
     powerH = 10,
     gap = 4,
 
-    -- Elements
     showName = true,
     showHPText = true,
     showPowerText = false,
     showPower = true,
 
-    -- Fonts
     nameSize = 11,
     hpSize = 10,
     powerSize = 9,
 
-    -- Offsets
     nameOffX = 0, nameOffY = 0,
     hpOffX = 0,   hpOffY = 0,
     powOffX = 0,  powOffY = 0,
 
-    -- Text Colors
     nameR=1, nameG=1, nameB=1,
     hpTextR=1, hpTextG=1, hpTextB=1,
     powTextR=1, powTextG=1, powTextB=1,
 
-    -- Overlays
     showIncomingHeals = true,
     showHealAbsorb    = true,
     showAbsorb        = true,
 
-    -- Skinning
     useTexture = true,
     baseTexturePath = "Interface\\AddOns\\"..AddonName.."\\media\\base.tga",
     noColorOverride = true,
     tintOnlyOnBase  = true,
 
-    -- Fallback tint colors
     useClassColor = true,
     useCustomHP = false,
     hpR=0.2, hpG=0.8, hpB=0.2,
@@ -76,10 +69,17 @@ local function GetCfg()
     return DEFAULTS
 end
 
+local function GetScale()
+    if R and R.GetMainUnitFrameScale then
+        return R:GetMainUnitFrameScale()
+    end
+    return 1
+end
+
 ToT.Defaults = DEFAULTS
 
 -- ============================================================
--- 2) HELPERS (secret-safe)
+-- 2) HELPERS
 -- ============================================================
 local function issecret(v)
     if type(_G.issecretvalue) == "function" then
@@ -102,7 +102,6 @@ end
 local function IsSafeNumber(v)    return type(v) == "number" and not issecret(v) end
 local function IsSafePositive(v)  return IsSafeNumber(v) and v > 0 end
 
--- allow secret numbers for BAR FILL (no comparisons)
 local function IsNumberAny(v) return type(v) == "number" end
 local function IsPositiveAny(v)
     if type(v) ~= "number" then return false end
@@ -242,38 +241,38 @@ local function GetSkinInfo()
     local base = cfg.baseTexturePath or (MEDIA .. "base.tga")
 
     if not cfg.useTexture then
-        return "Interface\\TARGETINGFRAME\\UI-StatusBar", false, "blizz"
+        return "Interface\\TARGETINGFRAME\\UI-StatusBar", false, "blizz", base
     end
 
     if not UnitExists(UNIT) then
-        return base, true, "none"
+        return base, true, "none", base
     end
 
     if UnitIsPlayer(UNIT) then
         local _, class = UnitClass(UNIT)
         local tex = class and CLASS_TEXTURES[class]
         if tex then
-            return tex, true, "p:" .. tostring(class)
+            return tex, true, "p:" .. tostring(class), base
         end
-        return base, false, "p:base"
+        return base, false, "p:base", base
     end
 
     if UnitCanAttack("player", UNIT) then
-        return (NPC_TEXTURES.hostile or base), true, "npc:hostile"
+        return (NPC_TEXTURES.hostile or base), true, "npc:hostile", base
     end
 
     local rc = UnitReaction("player", UNIT)
     if rc == nil then
-        return (NPC_TEXTURES.neutral or base), true, "npc:neutral?"
+        return (NPC_TEXTURES.neutral or base), true, "npc:neutral?", base
     end
 
     if rc >= 5 then
-        return (NPC_TEXTURES.friendly or base), true, "npc:friendly"
+        return (NPC_TEXTURES.friendly or base), true, "npc:friendly", base
     elseif rc == 4 then
-        return (NPC_TEXTURES.neutral or base), true, "npc:neutral"
+        return (NPC_TEXTURES.neutral or base), true, "npc:neutral", base
     end
 
-    return (NPC_TEXTURES.hostile or base), true, "npc:hostile2"
+    return (NPC_TEXTURES.hostile or base), true, "npc:hostile2", base
 end
 
 -- ============================================================
@@ -294,7 +293,7 @@ end
 ToT.__lastSkinKey = nil
 
 local function ReanchorOverlays()
-    if not ToT or not ToT.root or not ToT.hp or not ToT.incBar or not ToT.healAbsBar or not ToT.shieldAbsBar then return end
+    if not ToT.root or not ToT.hp or not ToT.incBar or not ToT.healAbsBar or not ToT.shieldAbsBar then return end
 
     local hpTexture = ToT.hp:GetStatusBarTexture()
     if hpTexture then
@@ -320,10 +319,8 @@ local function ApplyHPStyle(force)
     local texPath, preferWhite, kindKey = GetSkinInfo()
     texPath = texPath or base
 
-    -- IMPORTANT: Never store/compare raw guid. Convert to safe string.
     local guidStr = SafeStr(UnitGUID(UNIT), "noguid")
 
-    -- Pure string key => safe to compare even when underlying guid is secret.
     local skinKey =
         guidStr .. "|" ..
         SafeStr(texPath, "") .. "|" ..
@@ -344,7 +341,6 @@ local function ApplyHPStyle(force)
         if tex.SetVertTile then tex:SetVertTile(false) end
     end
 
-    -- overlays follow statusbar edge
     ReanchorOverlays()
 
     local forceWhite = false
@@ -410,7 +406,6 @@ ToT.__driverApplied = false
 ToT.__pendingDriver = false
 
 local function ApplySecureVisibility()
-    if not ToT.root then return end
     local cfg = GetCfg()
 
     if InCombatLockdown() then
@@ -419,20 +414,32 @@ local function ApplySecureVisibility()
     end
     ToT.__pendingDriver = false
 
-    if not RegisterStateDriver then return end
-
-    if ToT.__driverApplied and UnregisterStateDriver then
-        pcall(UnregisterStateDriver, ToT.root)
+    if ToT.holder and ToT.__driverApplied and UnregisterStateDriver then
+        pcall(UnregisterStateDriver, ToT.holder)
         ToT.__driverApplied = false
     end
 
+    if not ToT.holder then return end
+
+    if not RegisterStateDriver then
+        ToT.holder:SetShown(cfg.shown and true or false)
+        if ToT.anchor then
+            ToT.anchor:SetShown(cfg.shown and true or false)
+        end
+        return
+    end
+
     if cfg.shown then
-        pcall(RegisterStateDriver, ToT.root, "visibility", "[@targettarget,exists] show; hide")
+        pcall(RegisterStateDriver, ToT.holder, "visibility", "[@targettarget,exists] show; hide")
     else
-        pcall(RegisterStateDriver, ToT.root, "visibility", "hide")
+        pcall(RegisterStateDriver, ToT.holder, "visibility", "hide")
     end
 
     ToT.__driverApplied = true
+
+    if ToT.anchor then
+        ToT.anchor:SetShown(cfg.shown and true or false)
+    end
 end
 
 -- ============================================================
@@ -485,12 +492,25 @@ function ToT:Create()
     if self.root then return end
     local cfg = GetCfg()
 
-    local root = CreateFrame("Frame", "RobUI_TargetTargetFrame", UIParent, "BackdropTemplate")
+    local anchor = CreateFrame("Frame", "RobUI_TargetTargetFrameAnchor", UIParent, "BackdropTemplate")
+    self.anchor = anchor
+    anchor:SetSize(1, 1)
+    anchor:SetClampedToScreen(true)
+    anchor:SetMovable(true)
+    anchor:EnableMouse(true)
+    anchor:RegisterForDrag("LeftButton")
+
+    local holder = CreateFrame("Frame", "RobUI_TargetTargetFrameHolder", UIParent, "BackdropTemplate")
+    self.holder = holder
+    holder:SetClampedToScreen(true)
+
+    if R then
+        R.TargetTargetFrame = holder
+    end
+
+    local root = CreateFrame("Frame", "RobUI_TargetTargetFrame", holder, "BackdropTemplate")
     self.root = root
-    root:SetClampedToScreen(true)
-    root:SetMovable(true)
-    root:EnableMouse(true)
-    root:RegisterForDrag("LeftButton")
+    root:SetAllPoints(holder)
 
     local click = CreateFrame("Button", nil, root, "SecureUnitButtonTemplate")
     self.click = click
@@ -506,15 +526,21 @@ function ToT:Create()
         local c = GetCfg()
         if c.locked then return end
         if not IsShiftKeyDown() then return end
-        root:StartMoving()
+        anchor:StartMoving()
     end
 
     local function StopMove()
         if InCombatLockdown() then return end
-        root:StopMovingOrSizing()
+        anchor:StopMovingOrSizing()
+
         local c = GetCfg()
-        local p, _, rp, x, y = root:GetPoint(1)
-        c.point, c.relPoint, c.x, c.y = p, rp, math.floor((x or 0)+0.5), math.floor((y or 0)+0.5)
+        local p, _, rp, x, y = anchor:GetPoint(1)
+
+        c.point = p or "CENTER"
+        c.relPoint = rp or "CENTER"
+        c.x = math.floor((x or 0) + 0.5)
+        c.y = math.floor((y or 0) + 0.5)
+
         ToT:RequestLayout()
 
         if ns.UnitFrames.TargetTarget.Settings and ns.UnitFrames.TargetTarget.Settings.RefreshIfOpen then
@@ -522,12 +548,11 @@ function ToT:Create()
         end
     end
 
-    root:SetScript("OnDragStart", StartMove)
-    root:SetScript("OnDragStop", StopMove)
+    anchor:SetScript("OnDragStart", StartMove)
+    anchor:SetScript("OnDragStop", StopMove)
     click:SetScript("OnDragStart", StartMove)
     click:SetScript("OnDragStop", StopMove)
 
-    -- Bars
     local hp = CreateFrame("StatusBar", nil, root, "BackdropTemplate")
     self.hp = hp
     EnsureBackdrop(hp, 0.0)
@@ -547,7 +572,6 @@ function ToT:Create()
     powBg:SetColorTexture(0.1, 0.1, 0.1, 0.9)
     pow.bg = powBg
 
-    -- Overlays
     local clip = CreateFrame("Frame", nil, hp)
     self.clipFrame = clip
     clip:SetAllPoints(hp)
@@ -577,7 +601,6 @@ function ToT:Create()
     healAbs:SetFrameLevel(hp:GetFrameLevel() + 3)
     shield:SetFrameLevel(hp:GetFrameLevel() + 4)
 
-    -- Text
     self.nameText = hp:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     self.hpText   = hp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     self.powText  = pow:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -586,7 +609,6 @@ function ToT:Create()
     RegFont(self.hpText, cfg.hpSize, "OUTLINE")
     RegFont(self.powText, cfg.powerSize, "OUTLINE")
 
-    -- caches
     self._lastName = nil
     self._lastHPText = nil
     self._lastPowText = nil
@@ -608,16 +630,12 @@ end
 -- 11) LAYOUT
 -- ============================================================
 function ToT:ApplyLayout()
-    if not self.root then return end
+    if not self.root or not self.holder or not self.anchor then return end
     local cfg = GetCfg()
+    local scale = GetScale()
 
-    local root = self.root
-    root:ClearAllPoints()
-    if cfg.point then
-        root:SetPoint(cfg.point, UIParent, cfg.relPoint, cfg.x, cfg.y)
-    else
-        root:SetPoint("CENTER", UIParent, "CENTER", 540, 70)
-    end
+    local anchor = self.anchor
+    local holder = self.holder
 
     local w    = Clamp(cfg.w, 140, 900)
     local hpH  = Clamp(cfg.hpH, 10, 60)
@@ -628,11 +646,25 @@ function ToT:ApplyLayout()
     local totalH = hpH
     if showPower then totalH = totalH + gap + powH end
 
-    root:SetSize(w, totalH)
+    anchor:ClearAllPoints()
+    anchor:SetPoint(
+        cfg.point or "CENTER",
+        UIParent,
+        cfg.relPoint or "CENTER",
+        cfg.x or 540,
+        cfg.y or 70
+    )
+
+    holder:ClearAllPoints()
+    holder:SetPoint("TOPLEFT", anchor, "TOPLEFT", 0, 0)
+    holder:SetScale(scale or 1)
+    holder:SetSize(w, totalH)
+
+    self.root:SetAllPoints(holder)
 
     self.hp:ClearAllPoints()
-    self.hp:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
-    self.hp:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, 0)
+    self.hp:SetPoint("TOPLEFT", self.root, "TOPLEFT", 0, 0)
+    self.hp:SetPoint("TOPRIGHT", self.root, "TOPRIGHT", 0, 0)
     self.hp:SetHeight(hpH)
 
     if showPower then
@@ -675,13 +707,12 @@ function ToT:ApplyLayout()
     ApplyPowerColor()
     ReanchorOverlays()
 
-    -- reset caches that depend on max
     self._lastHMax = nil
     self._lastPMax = nil
 end
 
 -- ============================================================
--- 12) LIGHT UPDATE (HP/Power/Text) - NO heal/absorb math
+-- 12) LIGHT UPDATE
 -- ============================================================
 function ToT:UpdateAll()
     if not self.root then return end
@@ -697,13 +728,11 @@ function ToT:UpdateAll()
         return
     end
 
-    -- style only if needed
     ApplyHPStyle(false)
     ApplyPowerColor()
 
     SafeSetText(self, "_lastName", self.nameText, UnitName(UNIT) or "")
 
-    -- HP
     local hCur = UnitHealth(UNIT)
     local hMax = UnitHealthMax(UNIT)
 
@@ -728,7 +757,6 @@ function ToT:UpdateAll()
         end
     end
 
-    -- POWER
     local pCur = UnitPower(UNIT)
     local pMax = UnitPowerMax(UNIT)
 
@@ -755,7 +783,7 @@ function ToT:UpdateAll()
 end
 
 -- ============================================================
--- 12.5) HEAVY UPDATE (incoming/healabsorb/absorb) - event only
+-- 12.5) HEAVY UPDATE
 -- ============================================================
 function ToT:UpdateHealPred(force)
     if not self.root or not UnitExists(UNIT) then
@@ -948,7 +976,6 @@ SlashCmdList.TTOTSET = function()
     ToT:ToggleSettings()
 end
 
--- Optional profiler hooks
 if PROF and PROF.Wrap then
     ToT.UpdateAll = PROF:Wrap("UF:ToT", "UpdateAll", ToT.UpdateAll)
     ToT.ApplyLayout = PROF:Wrap("UF:ToT", "ApplyLayout", ToT.ApplyLayout)
