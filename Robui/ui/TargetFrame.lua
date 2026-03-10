@@ -22,7 +22,6 @@ local DEFAULTS = {
     powerH = 12,
     gap = 4,
 
-    -- Elements
     showName = true,
     showHPText = true,
     showPowerText = true,
@@ -30,44 +29,37 @@ local DEFAULTS = {
     showLevel = true,
     showClassTag = true,
 
-    -- Fonts (Sizes)
     nameSize = 12,
     hpSize = 11,
     powerSize = 10,
     lvlSize = 11,
     tagSize = 10,
 
-    -- Offsets
     nameOffX = 0, nameOffY = 0,
     hpOffX = 0,   hpOffY = 0,
     powOffX = 0,  powOffY = 0,
     lvlOffX = 0,  lvlOffY = 0,
     tagOffX = 0,  tagOffY = 0,
 
-    -- Text Colors
     nameR=1, nameG=1, nameB=1,
     hpTextR=1, hpTextG=1, hpTextB=1,
     powTextR=1, powTextG=1, powTextB=1,
     lvlTextR=1, lvlTextG=1, lvlTextB=1,
     tagTextR=1, tagTextG=1, tagTextB=1,
 
-    -- Overlays
     showIncomingHeals = true,
     showHealAbsorb    = true,
     showAbsorb        = true,
 
-    -- Skinning
     useTexture = true,
     baseTexturePath = "Interface\\AddOns\\"..AddonName.."\\media\\base.tga",
     noColorOverride = true,
     tintOnlyOnBase  = true,
 
-    -- Fallback tint colors
     useClassColor = true,
     useCustomHP = false,
     hpR=0.2, hpG=0.8, hpB=0.2,
 
-    -- Power override (optional)
     useCustomPower = false,
     powR=0.2, powG=0.4, powB=1.0,
 }
@@ -79,6 +71,13 @@ local function GetCfg()
     return DEFAULTS
 end
 TF.Defaults = DEFAULTS
+
+local function GetScale()
+    if R and R.GetMainUnitFrameScale then
+        return R:GetMainUnitFrameScale()
+    end
+    return 1
+end
 
 -- ------------------------------------------------------------
 -- 2) Secret-safe helpers
@@ -118,7 +117,6 @@ local function SafeStr(v)
     return tostring(v)
 end
 
--- allow secret numbers for bar fill (no comparisons), but NOT for text/math
 local function IsNumberAny(v) return type(v) == "number" end
 local function IsPositiveAny(v)
     if type(v) ~= "number" then return false end
@@ -190,7 +188,6 @@ local function GetReactionColorRGB(unit)
     return r, g, b
 end
 
--- Secret-safe SetText with caching (no secret comparisons)
 local function SafeSetText(self, key, fs, txt)
     if not fs or not fs.SetText then return end
     if txt == nil then txt = "" end
@@ -246,38 +243,38 @@ local function GetTargetSkinInfo()
     local base = cfg.baseTexturePath or (MEDIA_PATH .. "base.tga")
 
     if not cfg.useTexture then
-        return "Interface\\TARGETINGFRAME\\UI-StatusBar", false, "blizz"
+        return "Interface\\TARGETINGFRAME\\UI-StatusBar", false, "blizz", base
     end
 
     if not UnitExists(UNIT) then
-        return base, true, "none"
+        return base, true, "none", base
     end
 
     if UnitIsPlayer(UNIT) then
         local _, class = UnitClass(UNIT)
         local tex = class and CLASS_TEXTURES[class]
         if tex then
-            return tex, true, "p:" .. tostring(class)
+            return tex, true, "p:" .. tostring(class), base
         end
-        return base, false, "p:base"
+        return base, false, "p:base", base
     end
 
     if UnitCanAttack("player", UNIT) then
-        return (NPC_TEXTURES.hostile or base), true, "npc:hostile"
+        return (NPC_TEXTURES.hostile or base), true, "npc:hostile", base
     end
 
     local rc = UnitReaction("player", UNIT)
     if rc == nil then
-        return (NPC_TEXTURES.neutral or base), true, "npc:neutral?"
+        return (NPC_TEXTURES.neutral or base), true, "npc:neutral?", base
     end
 
     if rc >= 5 then
-        return (NPC_TEXTURES.friendly or base), true, "npc:friendly"
+        return (NPC_TEXTURES.friendly or base), true, "npc:friendly", base
     elseif rc == 4 then
-        return (NPC_TEXTURES.neutral or base), true, "npc:neutral"
+        return (NPC_TEXTURES.neutral or base), true, "npc:neutral", base
     end
 
-    return (NPC_TEXTURES.hostile or base), true, "npc:hostile2"
+    return (NPC_TEXTURES.hostile or base), true, "npc:hostile2", base
 end
 
 -- ------------------------------------------------------------
@@ -297,9 +294,8 @@ end
 -- ------------------------------------------------------------
 TF.__lastSkinKey = nil
 
--- Re-anchor overlays when hp texture changes
 local function ReanchorOverlays()
-    if not TF or not TF.root or not TF.hp or not TF.incBar or not TF.healAbsBar or not TF.shieldAbsBar then return end
+    if not TF.root or not TF.hp or not TF.incBar or not TF.healAbsBar or not TF.shieldAbsBar then return end
 
     local hpTexture = TF.hp:GetStatusBarTexture()
     if hpTexture then
@@ -348,7 +344,6 @@ local function ApplyHPStyle(force)
         if tex.SetVertTile then tex:SetVertTile(false) end
     end
 
-    -- overlays follow current statusbar texture edge
     ReanchorOverlays()
 
     local forceWhite = false
@@ -384,7 +379,7 @@ local function ApplyHPStyle(force)
 end
 
 -- ------------------------------------------------------------
--- 5.5) POWER COLOR FIX (power-type only: mana/rage/energy/etc)
+-- 5.5) POWER COLOR
 -- ------------------------------------------------------------
 local function GetPowerColorRGB(unit, cfg)
     if cfg and cfg.useCustomPower then
@@ -404,7 +399,7 @@ local function GetPowerColorRGB(unit, cfg)
 end
 
 local function ApplyPowerColor()
-    if not TF or not TF.power then return end
+    if not TF.power then return end
     local cfg = GetCfg()
     local r, g, b = GetPowerColorRGB(UNIT, cfg)
     TF.power:SetStatusBarColor(r, g, b)
@@ -417,7 +412,6 @@ TF.__driverApplied = false
 TF.__pendingDriver = false
 
 local function ApplySecureVisibility()
-    if not TF.root then return end
     local cfg = GetCfg()
 
     if InCombatLockdown() then
@@ -426,24 +420,36 @@ local function ApplySecureVisibility()
     end
     TF.__pendingDriver = false
 
-    if not RegisterStateDriver then return end
-
-    if TF.__driverApplied and UnregisterStateDriver then
-        pcall(UnregisterStateDriver, TF.root)
+    if TF.holder and TF.__driverApplied and UnregisterStateDriver then
+        pcall(UnregisterStateDriver, TF.holder)
         TF.__driverApplied = false
     end
 
+    if not TF.holder then return end
+
+    if not RegisterStateDriver then
+        TF.holder:SetShown(cfg.shown and true or false)
+        if TF.anchor then
+            TF.anchor:SetShown(cfg.shown and true or false)
+        end
+        return
+    end
+
     if cfg.shown then
-        pcall(RegisterStateDriver, TF.root, "visibility", "[@target,exists] show; hide")
+        pcall(RegisterStateDriver, TF.holder, "visibility", "[@target,exists] show; hide")
     else
-        pcall(RegisterStateDriver, TF.root, "visibility", "hide")
+        pcall(RegisterStateDriver, TF.holder, "visibility", "hide")
     end
 
     TF.__driverApplied = true
+
+    if TF.anchor then
+        TF.anchor:SetShown(cfg.shown and true or false)
+    end
 end
 
 -- ------------------------------------------------------------
--- 7) Deferred skin refresh (ONLY for skin-changing events)
+-- 7) Deferred skin refresh
 -- ------------------------------------------------------------
 TF.__skinQueued = false
 function TF:QueueSkinRefresh()
@@ -491,12 +497,25 @@ end
 function TF:Initialize()
     if self.root then return end
 
-    local root = CreateFrame("Frame", "RobUI_TargetFrame", UIParent, "BackdropTemplate")
+    local anchor = CreateFrame("Frame", "RobUI_TargetFrameAnchor", UIParent, "BackdropTemplate")
+    self.anchor = anchor
+    anchor:SetSize(1, 1)
+    anchor:SetClampedToScreen(true)
+    anchor:SetMovable(true)
+    anchor:EnableMouse(true)
+    anchor:RegisterForDrag("LeftButton")
+
+    local holder = CreateFrame("Frame", "RobUI_TargetFrameHolder", UIParent, "BackdropTemplate")
+    self.holder = holder
+    holder:SetClampedToScreen(true)
+
+    if R then
+        R.TargetFrame = holder
+    end
+
+    local root = CreateFrame("Frame", "RobUI_TargetFrame", holder, "BackdropTemplate")
     self.root = root
-    root:SetClampedToScreen(true)
-    root:SetMovable(true)
-    root:EnableMouse(true)
-    root:RegisterForDrag("LeftButton")
+    root:SetAllPoints(holder)
 
     local click = CreateFrame("Button", nil, root, "SecureUnitButtonTemplate")
     self.click = click
@@ -512,24 +531,29 @@ function TF:Initialize()
         local cfg = GetCfg()
         if cfg.locked then return end
         if not IsShiftKeyDown() then return end
-        root:StartMoving()
+        anchor:StartMoving()
     end
 
     local function StopMove()
         if InCombatLockdown() then return end
-        root:StopMovingOrSizing()
+        anchor:StopMovingOrSizing()
+
         local cfg = GetCfg()
-        local p, _, rp, x, y = root:GetPoint(1)
-        cfg.point, cfg.relPoint = p or "CENTER", rp or "CENTER"
-        cfg.x, cfg.y = math.floor((x or 0)+0.5), math.floor((y or 0)+0.5)
+        local p, _, rp, x, y = anchor:GetPoint(1)
+
+        cfg.point = p or "CENTER"
+        cfg.relPoint = rp or "CENTER"
+        cfg.x = math.floor((x or 0) + 0.5)
+        cfg.y = math.floor((y or 0) + 0.5)
+
         TF:RequestLayout()
         if ns.UnitFrames.Target.Settings and ns.UnitFrames.Target.Settings.RefreshIfOpen then
             ns.UnitFrames.Target.Settings.RefreshIfOpen()
         end
     end
 
-    root:SetScript("OnDragStart", StartMove)
-    root:SetScript("OnDragStop", StopMove)
+    anchor:SetScript("OnDragStart", StartMove)
+    anchor:SetScript("OnDragStop", StopMove)
     click:SetScript("OnDragStart", StartMove)
     click:SetScript("OnDragStop", StopMove)
 
@@ -594,7 +618,6 @@ function TF:Initialize()
     RegFont(self.levelText, cfg.lvlSize, "OUTLINE")
     RegFont(self.tagText, cfg.tagSize, "OUTLINE")
 
-    -- caches
     self._lastName = nil
     self._lastHPText = nil
     self._lastPowText = nil
@@ -618,16 +641,12 @@ end
 -- 12) Layout apply
 -- ------------------------------------------------------------
 function TF:ApplyLayout()
-    if not self.root then return end
+    if not self.root or not self.holder or not self.anchor then return end
     local cfg = GetCfg()
+    local scale = GetScale()
 
-    local root = self.root
-    root:ClearAllPoints()
-    if cfg.point then
-        root:SetPoint(cfg.point, UIParent, cfg.relPoint, cfg.x, cfg.y)
-    else
-        root:SetPoint("CENTER", UIParent, "CENTER", 280, 120)
-    end
+    local anchor = self.anchor
+    local holder = self.holder
 
     local w    = Clamp(cfg.w, 140, 900)
     local hpH  = Clamp(cfg.hpH, 10, 60)
@@ -638,11 +657,25 @@ function TF:ApplyLayout()
     local totalH = hpH
     if showPower then totalH = totalH + gap + powH end
 
-    root:SetSize(w, totalH)
+    anchor:ClearAllPoints()
+    anchor:SetPoint(
+        cfg.point or "CENTER",
+        UIParent,
+        cfg.relPoint or "CENTER",
+        cfg.x or 280,
+        cfg.y or 120
+    )
+
+    holder:ClearAllPoints()
+    holder:SetPoint("TOPLEFT", anchor, "TOPLEFT", 0, 0)
+    holder:SetScale(scale or 1)
+    holder:SetSize(w, totalH)
+
+    self.root:SetAllPoints(holder)
 
     self.hp:ClearAllPoints()
-    self.hp:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
-    self.hp:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, 0)
+    self.hp:SetPoint("TOPLEFT", self.root, "TOPLEFT", 0, 0)
+    self.hp:SetPoint("TOPRIGHT", self.root, "TOPRIGHT", 0, 0)
     self.hp:SetHeight(hpH)
 
     if showPower then
@@ -711,14 +744,13 @@ local function GetClassificationTag(unit)
 end
 
 -- ------------------------------------------------------------
--- 13) Lightweight update (HP/Power/Text) - NO heal/absorb math
+-- 13) Lightweight update
 -- ------------------------------------------------------------
 function TF:UpdateAll()
     if not self.root then return end
     local cfg = GetCfg()
 
     if not UnitExists(UNIT) then
-        -- clear overlays + texts without polling
         SafeSetText(self, "_lastName", self.nameText, "")
         SafeSetText(self, "_lastHPText", self.hpText, "")
         SafeSetText(self, "_lastPowText", self.powText, "")
@@ -730,7 +762,6 @@ function TF:UpdateAll()
         return
     end
 
-    -- texture style only when key changes
     ApplyHPStyle(false)
 
     SafeSetText(self, "_lastName", self.nameText, UnitName(UNIT) or "")
@@ -752,7 +783,6 @@ function TF:UpdateAll()
         SafeSetText(self, "_lastTag", self.tagText, "")
     end
 
-    -- HP
     local hCur = UnitHealth(UNIT)
     local hMax = UnitHealthMax(UNIT)
 
@@ -761,12 +791,10 @@ function TF:UpdateAll()
         self.hp:SetValue(1)
         SafeSetText(self, "_lastHPText", self.hpText, "")
     else
-        -- Only set MinMax when safe + changed (no secret comparisons)
         if IsSafeNumber(hMax) and self._lastHMax ~= hMax then
             self._lastHMax = hMax
             self.hp:SetMinMaxValues(0, hMax)
         elseif not IsSafeNumber(hMax) then
-            -- secret max: must still set, but we avoid comparisons
             self.hp:SetMinMaxValues(0, hMax)
         end
 
@@ -779,7 +807,6 @@ function TF:UpdateAll()
         end
     end
 
-    -- POWER
     local pCur = UnitPower(UNIT)
     local pMax = UnitPowerMax(UNIT)
 
@@ -808,7 +835,7 @@ function TF:UpdateAll()
 end
 
 -- ------------------------------------------------------------
--- 13.5) Heavy update (incoming heals / absorbs) - event only
+-- 13.5) Heavy update
 -- ------------------------------------------------------------
 function TF:UpdateHealPred(force)
     if not self.root or not UnitExists(UNIT) then
@@ -893,13 +920,13 @@ function TF:SetShown(v)
 end
 
 -- ------------------------------------------------------------
--- 14) Events (event-driven, no ticker)
+-- 14) Events
 -- ------------------------------------------------------------
 local HEAL_EVENTS = {
     UNIT_HEAL_PREDICTION = true,
     UNIT_ABSORB_AMOUNT_CHANGED = true,
     UNIT_HEAL_ABSORB_AMOUNT_CHANGED = true,
-    UNIT_MAXHEALTH = true, -- max changes affects overlay sizing
+    UNIT_MAXHEALTH = true,
 }
 
 local E = CreateFrame("Frame")
@@ -958,14 +985,12 @@ E:SetScript("OnEvent", function(_, event, unit)
         return
     end
 
-    -- heal/absorb only on heal events (heavy)
     if HEAL_EVENTS[event] then
         TF:UpdateAll()
         TF:UpdateHealPred(false)
         return
     end
 
-    -- light updates
     TF:UpdateAll()
 end)
 
@@ -985,7 +1010,6 @@ SlashCmdList.TTFSET = function()
     TF:ToggleSettings()
 end
 
--- Optional profiler hooks
 if PROF and PROF.Wrap then
     TF.UpdateAll = PROF:Wrap("UF:Target", "UpdateAll", TF.UpdateAll)
     TF.ApplyLayout = PROF:Wrap("UF:Target", "ApplyLayout", TF.ApplyLayout)
