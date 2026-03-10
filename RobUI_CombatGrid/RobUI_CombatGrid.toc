@@ -2,7 +2,7 @@
 ## Title: |cff00b3ffRobUI|r Combat Grid
 ## Notes: Combat Grid module for RobUI (profiles + unified settings)
 ## Author: Roburmaster
-## Version: 1.0.1
+## Version: 1.0.2
 ## SavedVariables: RobUIGrid_GlobalDB, RobUIGridDB3, RobUIIncomingCastDB, RobUISetupDB
 ## RequiredDeps: Robui
 
