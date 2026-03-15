@@ -4,6 +4,13 @@ All notable changes to RobUI will be documented in this file.
 
 The format follows a simplified Keep a Changelog style.
 
+## v0.7.9
+
+xptracker removed. it will return as its own addon.
+added /rgear and /ramr
+Scanns all bags and you you can import gear string from askmrrobot. it will then find where your gear is. It will also create a shopping list for gems and such on the ah. Open ah click button and it will auto search for you.
+
+
 ## v0.7.84
 Unit frame positioning system has been completely redesigned to ensure stable positioning when scaling frames.
 
