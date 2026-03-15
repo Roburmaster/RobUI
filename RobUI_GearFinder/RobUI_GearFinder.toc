@@ -1,0 +1,10 @@
+## Interface: 120001
+## Title: RobUI Gear Finder
+## Notes: Gear scanner + AskMrRobot finder for RobUI
+## Author: You
+## Version: 0.1.0
+## RequiredDeps: Robui
+## SavedVariables: RobUIGearFinderDB
+
+gearindex.lua
+amrfinder.lua
