@@ -7,6 +7,7 @@ local UIParent = UIParent
 local tonumber = tonumber
 local floor = math.floor
 local ipairs = ipairs
+local type = type
 
 local UIDropDownMenu_Initialize = UIDropDownMenu_Initialize
 local UIDropDownMenu_CreateInfo = UIDropDownMenu_CreateInfo
@@ -45,12 +46,45 @@ local RANGE_ICON_MIN, RANGE_ICON_MAX = 0, 128
 local RANGE_BOX_W_MIN, RANGE_BOX_W_MAX = 20, 600
 local RANGE_BOX_H_MIN, RANGE_BOX_H_MAX = 8, 120
 
+local function IsRefreshing(owner)
+    return owner and owner._refreshing
+end
+
+local function SafeSetChecked(owner, checkbox, value)
+    if not checkbox then return end
+    owner._refreshing = true
+    checkbox:SetChecked(value and true or false)
+    owner._refreshing = false
+end
+
+local function SafeSetSliderValue(owner, slider, value, fallback)
+    if not slider then return end
+    local v = tonumber(value)
+    if v == nil then v = fallback or 0 end
+    owner._refreshing = true
+    slider:SetValue(v)
+    slider:SetExactValueText(v)
+    owner._refreshing = false
+end
+
+local function SafeSetSliderRange(owner, slider, minV, maxV)
+    if not slider then return end
+    owner._refreshing = true
+    slider:SetMinMaxValues(minV, maxV)
+    local cur = tonumber(slider:GetValue()) or minV
+    if cur < minV then cur = minV end
+    if cur > maxV then cur = maxV end
+    slider:SetValue(cur)
+    slider:SetExactValueText(cur)
+    owner._refreshing = false
+end
+
 -- UI Element Generators
-local function CreateCheckbox(parent, label, onClick)
+local function CreateCheckbox(owner, parent, label, onClick)
     local b = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
     b.Text:SetText(label)
     b:SetScript("OnClick", function(self)
-        if parent and parent._refreshing then return end
+        if IsRefreshing(owner) then return end
         if onClick then onClick(self, self:GetChecked() and true or false) end
     end)
     return b
@@ -71,7 +105,7 @@ local function CreateButton(parent, label, w, h, onClick)
     bg:SetPoint("TOPLEFT", 1, -1)
     bg:SetPoint("BOTTOMRIGHT", -1, 1)
     b.bg = bg
-    
+
     -- Store base colors so OnMouseUp restores correctly
     b.baseR, b.baseG, b.baseB = 0.15, 0.15, 0.15
     b.bg:SetColorTexture(b.baseR, b.baseG, b.baseB, 1)
@@ -88,7 +122,7 @@ local function CreateButton(parent, label, w, h, onClick)
     text:SetText(label)
     b.text = text
 
-    -- Click Animation (darkens the current base color)
+    -- Click Animation
     b:SetScript("OnMouseDown", function(self)
         self.bg:SetColorTexture(self.baseR * 0.5, self.baseG * 0.5, self.baseB * 0.5, 1)
         self.text:SetPoint("CENTER", 1, -1)
@@ -97,15 +131,14 @@ local function CreateButton(parent, label, w, h, onClick)
         self.bg:SetColorTexture(self.baseR, self.baseG, self.baseB, 1)
         self.text:SetPoint("CENTER", 0, 0)
     end)
-    
+
     b:SetScript("OnClick", function()
         if onClick then onClick() end
     end)
 
-    -- Method to dynamically update the button color
-    function b:SetButtonColor(r, g, b)
-        self.baseR, self.baseG, self.baseB = r, g, b
-        self.bg:SetColorTexture(r, g, b, 1)
+    function b:SetButtonColor(r, g, b2)
+        self.baseR, self.baseG, self.baseB = r, g, b2
+        self.bg:SetColorTexture(r, g, b2, 1)
     end
 
     return b
@@ -117,7 +150,7 @@ local function CreateHeader(parent, text)
     return t
 end
 
-local function CreateSlider(parent, label, minV, maxV, step, onValueChanged)
+local function CreateSlider(owner, parent, label, minV, maxV, step, onValueChanged)
     local name = NextSliderName()
     local s = CreateFrame("Slider", name, parent, "OptionsSliderTemplate")
     s:SetMinMaxValues(minV, maxV)
@@ -144,22 +177,12 @@ local function CreateSlider(parent, label, minV, maxV, step, onValueChanged)
 
     s:SetScript("OnValueChanged", function(self, v)
         self:SetExactValueText(v)
-        if parent and parent._refreshing then return end
+        if IsRefreshing(owner) then return end
         if onValueChanged then onValueChanged(self, v) end
     end)
 
     s._labelFS = textFS
     return s
-end
-
-local function SetSliderRange(slider, minV, maxV)
-    if not slider then return end
-    slider:SetMinMaxValues(minV, maxV)
-    local cur = tonumber(slider:GetValue()) or minV
-    if cur < minV then cur = minV end
-    if cur > maxV then cur = maxV end
-    slider:SetValue(cur)
-    slider:SetExactValueText(cur)
 end
 
 local function CreateGroupPanel(parent, titleText, width, height)
@@ -168,11 +191,11 @@ local function CreateGroupPanel(parent, titleText, width, height)
     if type(CB.CreateSafeBorder) == "function" then
         CB:CreateSafeBorder(panel, 0, 1, {0.05, 0.05, 0.05, 0.7}, {0, 0, 0, 1})
     end
-    
+
     local title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("BOTTOMLEFT", panel, "TOPLEFT", 4, 4)
     title:SetText(titleText)
-    
+
     return panel
 end
 
@@ -234,11 +257,11 @@ function CB:EnsureSettingsPanel()
     f:EnableMouse(true)
     f:SetMovable(true)
     f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", function(self) self:StartMoving() end)
-    f:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+    f:SetScript("OnDragStart", function(selfFrame) selfFrame:StartMoving() end)
+    f:SetScript("OnDragStop", function(selfFrame) selfFrame:StopMovingOrSizing() end)
     f:Hide()
     f._refreshing = false
-    f.testModeActive = false -- Tracker statusen på Test Mode
+    f.testModeActive = false
 
     self:CreateSafeBorder(f, 0, 1, {0.08, 0.08, 0.08, 0.98}, {0, 0, 0, 1})
 
@@ -261,7 +284,6 @@ function CB:EnsureSettingsPanel()
 
     local content = CreateFrame("Frame", nil, sf)
     content:SetSize(720, 850)
-    content._refreshing = false
     sf:SetScrollChild(content)
 
     local selectedKey = "player"
@@ -276,7 +298,7 @@ function CB:EnsureSettingsPanel()
     local pnlGeneral = CreateGroupPanel(content, "General & Selection", 720, 80)
     pnlGeneral:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -20)
 
-    local globalEnabled = CreateCheckbox(pnlGeneral, "Enable Castbars (disables Blizzard castbar)", function(_, v)
+    local globalEnabled = CreateCheckbox(f, pnlGeneral, "Enable Castbars (disables Blizzard castbar)", function(_, v)
         local db = CB:GetDB()
         if db then
             db.global.enabled = v and true or false
@@ -309,143 +331,195 @@ function CB:EnsureSettingsPanel()
     ---------------------------------------------------------
     -- LEFT COLUMN
     ---------------------------------------------------------
-    -- PANEL: Bar Preferences
     local pnlBar = CreateGroupPanel(content, "Bar Preferences", 340, 160)
     pnlBar:SetPoint("TOPLEFT", pnlGeneral, "BOTTOMLEFT", 0, -30)
 
-    f.cbEnabled = CreateCheckbox(pnlBar, "Enabled (this bar)", function(_, v)
+    f.cbEnabled = CreateCheckbox(f, pnlBar, "Enabled (this bar)", function(_, v)
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].enabled = v and true or false; CB:UpdateBarLayout(selectedKey) end
+        if db and db[selectedKey] then
+            db[selectedKey].enabled = v and true or false
+            CB:UpdateBarLayout(selectedKey)
+        end
     end)
     f.cbEnabled:SetPoint("TOPLEFT", 12, -12)
 
-    f.cbIcon = CreateCheckbox(pnlBar, "Show Icon", function(_, v)
+    f.cbIcon = CreateCheckbox(f, pnlBar, "Show Icon", function(_, v)
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].showIcon = v and true or false; CB:UpdateBarLayout(selectedKey) end
+        if db and db[selectedKey] then
+            db[selectedKey].showIcon = v and true or false
+            CB:UpdateBarLayout(selectedKey)
+        end
     end)
     f.cbIcon:SetPoint("TOPLEFT", f.cbEnabled, "BOTTOMLEFT", 0, -4)
 
-    f.cbLatency = CreateCheckbox(pnlBar, "Show Latency (Player only)", function(_, v)
+    f.cbLatency = CreateCheckbox(f, pnlBar, "Show Latency (Player only)", function(_, v)
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].showLatency = v and true or false; CB:UpdateBarLayout(selectedKey) end
+        if db and db[selectedKey] then
+            db[selectedKey].showLatency = v and true or false
+            CB:UpdateBarLayout(selectedKey)
+        end
     end)
     f.cbLatency:SetPoint("TOPLEFT", f.cbIcon, "BOTTOMLEFT", 0, -4)
 
     f.btnColor = CreateButton(pnlBar, "Pick Bar Color", 140, 22, function()
-        CB:OpenColorPickerForKey(selectedKey, "color", function() if f.RefreshSection then f:RefreshSection() end end)
+        CB:OpenColorPickerForKey(selectedKey, "color", function()
+            if f.RefreshSection then f:RefreshSection() end
+        end)
     end)
     f.btnColor:SetPoint("TOPLEFT", f.cbLatency, "BOTTOMLEFT", 4, -16)
 
     local btnShieldColor = CreateButton(pnlBar, "Pick Shield Color", 140, 22, function()
-        CB:OpenColorPickerForKey(selectedKey, "shieldColor", function() if f.RefreshSection then f:RefreshSection() end end)
+        CB:OpenColorPickerForKey(selectedKey, "shieldColor", function()
+            if f.RefreshSection then f:RefreshSection() end
+        end)
     end)
     btnShieldColor:SetPoint("LEFT", f.btnColor, "RIGHT", 10, 0)
 
-    -- PANEL: Size
     local pnlSize = CreateGroupPanel(content, "Size Settings", 340, 180)
     pnlSize:SetPoint("TOPLEFT", pnlBar, "BOTTOMLEFT", 0, -30)
 
-    f.slW = CreateSlider(pnlSize, "Width", RANGE_H_WIDTH_MIN, RANGE_H_WIDTH_MAX, 1, function(_, v)
+    f.slW = CreateSlider(f, pnlSize, "Width", RANGE_H_WIDTH_MIN, RANGE_H_WIDTH_MAX, 1, function(_, v)
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].width = floor(tonumber(v) or 200); CB:UpdateBarLayout(selectedKey) end
+        if db and db[selectedKey] then
+            db[selectedKey].width = floor(tonumber(v) or 200)
+            CB:UpdateBarLayout(selectedKey)
+        end
     end)
     f.slW:SetPoint("TOPLEFT", 16, -26)
 
-    f.slH = CreateSlider(pnlSize, "Height", RANGE_H_HEIGHT_MIN, RANGE_H_HEIGHT_MAX, 1, function(_, v)
+    f.slH = CreateSlider(f, pnlSize, "Height", RANGE_H_HEIGHT_MIN, RANGE_H_HEIGHT_MAX, 1, function(_, v)
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].height = floor(tonumber(v) or 14); CB:UpdateBarLayout(selectedKey) end
+        if db and db[selectedKey] then
+            db[selectedKey].height = floor(tonumber(v) or 14)
+            CB:UpdateBarLayout(selectedKey)
+        end
     end)
     f.slH:SetPoint("TOPLEFT", f.slW, "BOTTOMLEFT", 0, -28)
 
-    f.slIcon = CreateSlider(pnlSize, "Icon Size (0=Auto)", RANGE_ICON_MIN, RANGE_ICON_MAX, 1, function(_, v)
+    f.slIcon = CreateSlider(f, pnlSize, "Icon Size (0=Auto)", RANGE_ICON_MIN, RANGE_ICON_MAX, 1, function(_, v)
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].iconSize = floor(tonumber(v) or 0); CB:UpdateBarLayout(selectedKey) end
+        if db and db[selectedKey] then
+            db[selectedKey].iconSize = floor(tonumber(v) or 0)
+            CB:UpdateBarLayout(selectedKey)
+        end
     end)
     f.slIcon:SetPoint("TOPLEFT", f.slH, "BOTTOMLEFT", 0, -28)
 
     ---------------------------------------------------------
     -- RIGHT COLUMN
     ---------------------------------------------------------
-    -- PANEL: Text
     local pnlText = CreateGroupPanel(content, "Standard Text Settings", 360, 130)
     pnlText:SetPoint("TOPLEFT", pnlGeneral, "BOTTOMLEFT", 360, -30)
 
-    f.slTextSize = CreateSlider(pnlText, "Cast Text Size", RANGE_TEXT_MIN, RANGE_TEXT_MAX, 1, function(_, v)
+    f.slTextSize = CreateSlider(f, pnlText, "Cast Text Size", RANGE_TEXT_MIN, RANGE_TEXT_MAX, 1, function(_, v)
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].textSize = floor(tonumber(v) or 11); CB:UpdateBarLayout(selectedKey) end
+        if db and db[selectedKey] then
+            db[selectedKey].textSize = floor(tonumber(v) or 11)
+            CB:UpdateBarLayout(selectedKey)
+        end
     end)
     f.slTextSize:SetPoint("TOPLEFT", 16, -26)
 
-    f.slTimeSize = CreateSlider(pnlText, "Time Text Size", RANGE_TEXT_MIN, RANGE_TEXT_MAX, 1, function(_, v)
+    f.slTimeSize = CreateSlider(f, pnlText, "Time Text Size", RANGE_TEXT_MIN, RANGE_TEXT_MAX, 1, function(_, v)
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].timeSize = floor(tonumber(v) or 11); CB:UpdateBarLayout(selectedKey) end
+        if db and db[selectedKey] then
+            db[selectedKey].timeSize = floor(tonumber(v) or 11)
+            CB:UpdateBarLayout(selectedKey)
+        end
     end)
     f.slTimeSize:SetPoint("TOPLEFT", f.slTextSize, "BOTTOMLEFT", 0, -28)
 
-    -- PANEL: Extra Bars
     local pnlExtra = CreateGroupPanel(content, "Extra Bars (Positioning)", 360, 290)
     pnlExtra:SetPoint("TOPLEFT", pnlText, "BOTTOMLEFT", 0, -30)
     f.pnlExtra = pnlExtra
 
-    f.cbVertical = CreateCheckbox(pnlExtra, "Vertical Mode", function(_, v)
+    f.cbVertical = CreateCheckbox(f, pnlExtra, "Vertical Mode", function(_, v)
         if not CB:IsExtraKey(selectedKey) then
-            if f.cbVertical then f.cbVertical:SetChecked(false) end; return
+            SafeSetChecked(f, f.cbVertical, false)
+            return
         end
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].vertical = v and true or false; CB:UpdateBarLayout(selectedKey); if f.RefreshSection then f:RefreshSection() end end
+        if db and db[selectedKey] then
+            db[selectedKey].vertical = v and true or false
+            CB:UpdateBarLayout(selectedKey)
+            if f.RefreshSection then f:RefreshSection() end
+        end
     end)
     f.cbVertical:SetPoint("TOPLEFT", 12, -12)
 
-    f.slTextX = CreateSlider(pnlExtra, "Cast Text X Offset", -300, 300, 1, function(_, v)
+    f.slTextX = CreateSlider(f, pnlExtra, "Cast Text X Offset", -300, 300, 1, function(_, v)
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].textX = floor(tonumber(v) or 0); CB:UpdateBarLayout(selectedKey) end
+        if db and db[selectedKey] then
+            db[selectedKey].textX = floor(tonumber(v) or 0)
+            CB:UpdateBarLayout(selectedKey)
+        end
     end)
     f.slTextX:SetPoint("TOPLEFT", 16, -60)
 
-    f.slTextY = CreateSlider(pnlExtra, "Cast Text Y Offset", -300, 300, 1, function(_, v)
+    f.slTextY = CreateSlider(f, pnlExtra, "Cast Text Y Offset", -300, 300, 1, function(_, v)
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].textY = floor(tonumber(v) or 0); CB:UpdateBarLayout(selectedKey) end
+        if db and db[selectedKey] then
+            db[selectedKey].textY = floor(tonumber(v) or 0)
+            CB:UpdateBarLayout(selectedKey)
+        end
     end)
     f.slTextY:SetPoint("TOPLEFT", f.slTextX, "BOTTOMLEFT", 0, -28)
 
-    f.slTimeX = CreateSlider(pnlExtra, "Time Text X Offset", -300, 300, 1, function(_, v)
+    f.slTimeX = CreateSlider(f, pnlExtra, "Time Text X Offset", -300, 300, 1, function(_, v)
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].timeX = floor(tonumber(v) or 0); CB:UpdateBarLayout(selectedKey) end
+        if db and db[selectedKey] then
+            db[selectedKey].timeX = floor(tonumber(v) or 0)
+            CB:UpdateBarLayout(selectedKey)
+        end
     end)
     f.slTimeX:SetPoint("TOPLEFT", f.slTextY, "BOTTOMLEFT", 0, -28)
 
-    f.slTimeY = CreateSlider(pnlExtra, "Time Text Y Offset", -300, 300, 1, function(_, v)
+    f.slTimeY = CreateSlider(f, pnlExtra, "Time Text Y Offset", -300, 300, 1, function(_, v)
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].timeY = floor(tonumber(v) or 0); CB:UpdateBarLayout(selectedKey) end
+        if db and db[selectedKey] then
+            db[selectedKey].timeY = floor(tonumber(v) or 0)
+            CB:UpdateBarLayout(selectedKey)
+        end
     end)
     f.slTimeY:SetPoint("TOPLEFT", f.slTimeX, "BOTTOMLEFT", 0, -28)
 
-    -- PANEL: Extra Text Boxes
     local pnlExtraBox = CreateGroupPanel(content, "Extra Text Boxes (Dimensions)", 360, 240)
     pnlExtraBox:SetPoint("TOPLEFT", pnlExtra, "BOTTOMLEFT", 0, -30)
     f.pnlExtraBox = pnlExtraBox
 
-    f.slTextBoxW = CreateSlider(pnlExtraBox, "Cast Text Box Width", RANGE_BOX_W_MIN, RANGE_BOX_W_MAX, 1, function(_, v)
+    f.slTextBoxW = CreateSlider(f, pnlExtraBox, "Cast Text Box Width", RANGE_BOX_W_MIN, RANGE_BOX_W_MAX, 1, function(_, v)
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].textBoxW = floor(tonumber(v) or 160); CB:UpdateBarLayout(selectedKey) end
+        if db and db[selectedKey] then
+            db[selectedKey].textBoxW = floor(tonumber(v) or 160)
+            CB:UpdateBarLayout(selectedKey)
+        end
     end)
     f.slTextBoxW:SetPoint("TOPLEFT", 16, -26)
 
-    f.slTextBoxH = CreateSlider(pnlExtraBox, "Cast Text Box Height", RANGE_BOX_H_MIN, RANGE_BOX_H_MAX, 1, function(_, v)
+    f.slTextBoxH = CreateSlider(f, pnlExtraBox, "Cast Text Box Height", RANGE_BOX_H_MIN, RANGE_BOX_H_MAX, 1, function(_, v)
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].textBoxH = floor(tonumber(v) or 18); CB:UpdateBarLayout(selectedKey) end
+        if db and db[selectedKey] then
+            db[selectedKey].textBoxH = floor(tonumber(v) or 18)
+            CB:UpdateBarLayout(selectedKey)
+        end
     end)
     f.slTextBoxH:SetPoint("TOPLEFT", f.slTextBoxW, "BOTTOMLEFT", 0, -28)
 
-    f.slTimeBoxW = CreateSlider(pnlExtraBox, "Time Text Box Width", RANGE_BOX_W_MIN, RANGE_BOX_W_MAX, 1, function(_, v)
+    f.slTimeBoxW = CreateSlider(f, pnlExtraBox, "Time Text Box Width", RANGE_BOX_W_MIN, RANGE_BOX_W_MAX, 1, function(_, v)
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].timeBoxW = floor(tonumber(v) or 60); CB:UpdateBarLayout(selectedKey) end
+        if db and db[selectedKey] then
+            db[selectedKey].timeBoxW = floor(tonumber(v) or 60)
+            CB:UpdateBarLayout(selectedKey)
+        end
     end)
     f.slTimeBoxW:SetPoint("TOPLEFT", f.slTextBoxH, "BOTTOMLEFT", 0, -28)
 
-    f.slTimeBoxH = CreateSlider(pnlExtraBox, "Time Text Box Height", RANGE_BOX_H_MIN, RANGE_BOX_H_MAX, 1, function(_, v)
+    f.slTimeBoxH = CreateSlider(f, pnlExtraBox, "Time Text Box Height", RANGE_BOX_H_MIN, RANGE_BOX_H_MAX, 1, function(_, v)
         local db = CB:GetDB()
-        if db and db[selectedKey] then db[selectedKey].timeBoxH = floor(tonumber(v) or 18); CB:UpdateBarLayout(selectedKey) end
+        if db and db[selectedKey] then
+            db[selectedKey].timeBoxH = floor(tonumber(v) or 18)
+            CB:UpdateBarLayout(selectedKey)
+        end
     end)
     f.slTimeBoxH:SetPoint("TOPLEFT", f.slTimeBoxW, "BOTTOMLEFT", 0, -28)
 
@@ -453,15 +527,19 @@ function CB:EnsureSettingsPanel()
     -- LOGIC
     ---------------------------------------------------------
     local function UpdateSizeSliderLabelsAndRanges(isExtra, isVertical)
-        if f.slW and f.slW._labelFS then f.slW._labelFS:SetText((isExtra and isVertical) and "Thickness (Width)" or "Width") end
-        if f.slH and f.slH._labelFS then f.slH._labelFS:SetText((isExtra and isVertical) and "Length (Height)" or "Height") end
+        if f.slW and f.slW._labelFS then
+            f.slW._labelFS:SetText((isExtra and isVertical) and "Thickness (Width)" or "Width")
+        end
+        if f.slH and f.slH._labelFS then
+            f.slH._labelFS:SetText((isExtra and isVertical) and "Length (Height)" or "Height")
+        end
 
         if isExtra and isVertical then
-            SetSliderRange(f.slW, RANGE_V_THICK_MIN, RANGE_V_THICK_MAX)
-            SetSliderRange(f.slH, RANGE_V_LEN_MIN, RANGE_V_LEN_MAX)
+            SafeSetSliderRange(f, f.slW, RANGE_V_THICK_MIN, RANGE_V_THICK_MAX)
+            SafeSetSliderRange(f, f.slH, RANGE_V_LEN_MIN, RANGE_V_LEN_MAX)
         else
-            SetSliderRange(f.slW, RANGE_H_WIDTH_MIN, RANGE_H_WIDTH_MAX)
-            SetSliderRange(f.slH, RANGE_H_HEIGHT_MIN, RANGE_H_HEIGHT_MAX)
+            SafeSetSliderRange(f, f.slW, RANGE_H_WIDTH_MIN, RANGE_H_WIDTH_MAX)
+            SafeSetSliderRange(f, f.slH, RANGE_H_HEIGHT_MIN, RANGE_H_HEIGHT_MAX)
         end
     end
 
@@ -470,20 +548,19 @@ function CB:EnsureSettingsPanel()
         if not db then return end
 
         f._refreshing = true
-        content._refreshing = true
 
-        globalEnabled:SetChecked(db.global.enabled and true or false)
+        SafeSetChecked(f, globalEnabled, db.global.enabled and true or false)
 
-        -- Oppdater farge på Test Mode-knappen basert på status
-        if f.testModeActive then
-            f.testModeBtn:SetButtonColor(0.6, 0.1, 0.1) -- Mørk rød farge når aktiv
-        else
-            f.testModeBtn:SetButtonColor(0.15, 0.15, 0.15) -- Standard mørkegrå når av
+        if f.testModeBtn then
+            if f.testModeActive then
+                f.testModeBtn:SetButtonColor(0.6, 0.1, 0.1)
+            else
+                f.testModeBtn:SetButtonColor(0.15, 0.15, 0.15)
+            end
         end
 
         local sdb = GetSelectedDB()
         if not sdb then
-            content._refreshing = false
             f._refreshing = false
             return
         end
@@ -491,11 +568,11 @@ function CB:EnsureSettingsPanel()
         local isPlayer = (selectedKey:find("player") ~= nil)
         if f.cbLatency then
             f.cbLatency:SetEnabled(isPlayer and true or false)
-            f.cbLatency:SetChecked((isPlayer and sdb.showLatency) and true or false)
+            SafeSetChecked(f, f.cbLatency, (isPlayer and sdb.showLatency) and true or false)
         end
 
-        if f.cbEnabled then f.cbEnabled:SetChecked(sdb.enabled and true or false) end
-        if f.cbIcon then f.cbIcon:SetChecked(sdb.showIcon and true or false) end
+        SafeSetChecked(f, f.cbEnabled, sdb.enabled and true or false)
+        SafeSetChecked(f, f.cbIcon, sdb.showIcon and true or false)
 
         local isExtra = CB:IsExtraKey(selectedKey)
         local isVertical = (isExtra and sdb.vertical) and true or false
@@ -503,7 +580,9 @@ function CB:EnsureSettingsPanel()
         if isExtra then
             f.pnlExtra:Show()
             f.pnlExtraBox:Show()
-            if f.cbVertical then f.cbVertical:SetChecked(isVertical and true or false) end
+            if f.cbVertical then
+                SafeSetChecked(f, f.cbVertical, isVertical and true or false)
+            end
         else
             f.pnlExtra:Hide()
             f.pnlExtraBox:Hide()
@@ -511,38 +590,35 @@ function CB:EnsureSettingsPanel()
 
         UpdateSizeSliderLabelsAndRanges(isExtra, isVertical)
 
-        local function SyncSlider(slider, val, fallback)
-            if slider then slider:SetValue(tonumber(val) or fallback); slider:SetExactValueText(tonumber(val) or fallback) end
-        end
-
-        SyncSlider(f.slW, sdb.width, 200)
-        SyncSlider(f.slH, sdb.height, 14)
-        SyncSlider(f.slIcon, sdb.iconSize, 0)
-        SyncSlider(f.slTextSize, sdb.textSize, 11)
-        SyncSlider(f.slTimeSize, sdb.timeSize, 11)
+        SafeSetSliderValue(f, f.slW, sdb.width, 200)
+        SafeSetSliderValue(f, f.slH, sdb.height, 14)
+        SafeSetSliderValue(f, f.slIcon, sdb.iconSize, 0)
+        SafeSetSliderValue(f, f.slTextSize, sdb.textSize, 11)
+        SafeSetSliderValue(f, f.slTimeSize, sdb.timeSize, 11)
 
         if isExtra then
-            SyncSlider(f.slTextX, sdb.textX, 0)
-            SyncSlider(f.slTextY, sdb.textY, 0)
-            SyncSlider(f.slTimeX, sdb.timeX, 0)
-            SyncSlider(f.slTimeY, sdb.timeY, 0)
-            SyncSlider(f.slTextBoxW, sdb.textBoxW, 160)
-            SyncSlider(f.slTextBoxH, sdb.textBoxH, 18)
-            SyncSlider(f.slTimeBoxW, sdb.timeBoxW, 60)
-            SyncSlider(f.slTimeBoxH, sdb.timeBoxH, 18)
+            SafeSetSliderValue(f, f.slTextX, sdb.textX, 0)
+            SafeSetSliderValue(f, f.slTextY, sdb.textY, 0)
+            SafeSetSliderValue(f, f.slTimeX, sdb.timeX, 0)
+            SafeSetSliderValue(f, f.slTimeY, sdb.timeY, 0)
+            SafeSetSliderValue(f, f.slTextBoxW, sdb.textBoxW, 160)
+            SafeSetSliderValue(f, f.slTextBoxH, sdb.textBoxH, 18)
+            SafeSetSliderValue(f, f.slTimeBoxW, sdb.timeBoxW, 60)
+            SafeSetSliderValue(f, f.slTimeBoxH, sdb.timeBoxH, 18)
         end
 
-        content._refreshing = false
         f._refreshing = false
     end
 
     local function OnSelectKey(key)
         selectedKey = key
-        if UIDropDownMenu_SetText then UIDropDownMenu_SetText(dropdown, "Edit: " .. PrettyKey(key)) end
+        if UIDropDownMenu_SetText then
+            UIDropDownMenu_SetText(dropdown, "Edit: " .. PrettyKey(key))
+        end
         RefreshAllControls()
     end
 
-    local function InitDropdown(self, level)
+    local function InitDropdown(selfFrame, level)
         local info = UIDropDownMenu_CreateInfo()
         info.isTitle = true
         info.text = "Select Castbar"
@@ -553,7 +629,9 @@ function CB:EnsureSettingsPanel()
             local i = UIDropDownMenu_CreateInfo()
             i.text = PrettyKey(k)
             i.notCheckable = true
-            i.func = function() OnSelectKey(k) end
+            i.func = function()
+                OnSelectKey(k)
+            end
             UIDropDownMenu_AddButton(i, level)
         end
     end
@@ -564,10 +642,17 @@ function CB:EnsureSettingsPanel()
 
     function f:RefreshSection()
         RefreshAllControls()
-        if UIDropDownMenu_SetText then UIDropDownMenu_SetText(dropdown, "Edit: " .. PrettyKey(selectedKey)) end
+        if UIDropDownMenu_SetText then
+            UIDropDownMenu_SetText(dropdown, "Edit: " .. PrettyKey(selectedKey))
+        end
     end
 
-    f:SetScript("OnShow", function() OnSelectKey(selectedKey) end)
+    f:SetScript("OnShow", function()
+        RefreshAllControls()
+        if UIDropDownMenu_SetText then
+            UIDropDownMenu_SetText(dropdown, "Edit: " .. PrettyKey(selectedKey))
+        end
+    end)
 
     self.SettingsPanel = f
     return f
