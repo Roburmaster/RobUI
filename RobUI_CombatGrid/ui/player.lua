@@ -7,6 +7,7 @@
 --  - Hides automatically during Blizzard vehicle / override / possess UI
 --  - Re-applies secure visibility after combat if needed
 --  - Keeps existing ctDB/grid behavior
+--  - Added proper vertical orientation and anchoring for overlays
 -- ============================================================================
 local AddonName, ns = ...
 ns = _G[AddonName] or ns or {}
@@ -192,22 +193,40 @@ local function AnchorOverlays(self, db)
     self.healAbsBar:ClearAllPoints()
     self.shieldAbsBar:ClearAllPoints()
 
-    local vertical = db and db.isVertical
-    if vertical or not hpTex then
+    if not hpTex then
         self.incBar:SetAllPoints(hp)
         self.healAbsBar:SetAllPoints(hp)
         self.shieldAbsBar:SetAllPoints(hp)
         return
     end
 
-    self.incBar:SetPoint("TOPLEFT", hpTex, "TOPRIGHT")
-    self.incBar:SetPoint("BOTTOMLEFT", hpTex, "BOTTOMRIGHT")
+    if db and db.isVertical then
+        -- Vertical anchoring
+        -- Incoming heals extend upwards from the current health
+        self.incBar:SetPoint("BOTTOMLEFT", hpTex, "TOPLEFT")
+        self.incBar:SetPoint("BOTTOMRIGHT", hpTex, "TOPRIGHT")
 
-    self.healAbsBar:SetPoint("TOPRIGHT", hpTex, "TOPRIGHT")
-    self.healAbsBar:SetPoint("BOTTOMRIGHT", hpTex, "BOTTOMRIGHT")
+        -- Heal absorbs overlay the top of the current health going downwards
+        self.healAbsBar:SetPoint("TOPLEFT", hpTex, "TOPLEFT")
+        self.healAbsBar:SetPoint("TOPRIGHT", hpTex, "TOPRIGHT")
 
-    self.shieldAbsBar:SetPoint("TOPRIGHT", hp, "TOPRIGHT")
-    self.shieldAbsBar:SetPoint("BOTTOMRIGHT", hp, "BOTTOMRIGHT")
+        -- Shields overlay the top of the entire frame going downwards
+        self.shieldAbsBar:SetPoint("TOPLEFT", hp, "TOPLEFT")
+        self.shieldAbsBar:SetPoint("TOPRIGHT", hp, "TOPRIGHT")
+    else
+        -- Horizontal anchoring
+        -- Incoming heals extend rightwards from the current health
+        self.incBar:SetPoint("TOPLEFT", hpTex, "TOPRIGHT")
+        self.incBar:SetPoint("BOTTOMLEFT", hpTex, "BOTTOMRIGHT")
+
+        -- Heal absorbs overlay the right side of the current health going leftwards
+        self.healAbsBar:SetPoint("TOPRIGHT", hpTex, "TOPRIGHT")
+        self.healAbsBar:SetPoint("BOTTOMRIGHT", hpTex, "BOTTOMRIGHT")
+
+        -- Shields overlay the right side of the entire frame going leftwards
+        self.shieldAbsBar:SetPoint("TOPRIGHT", hp, "TOPRIGHT")
+        self.shieldAbsBar:SetPoint("BOTTOMRIGHT", hp, "BOTTOMRIGHT")
+    end
 end
 
 -- =========================================================
@@ -332,12 +351,19 @@ function PF:ApplyLayout()
 
     self.hpText:ClearAllPoints()
 
+    -- Set exact orientation for HP and all Overlay StatusBars
     if db.isVertical then
         self.root:SetSize(db.hpH, db.w)
         self.hp:SetOrientation("VERTICAL")
+        if self.incBar then self.incBar:SetOrientation("VERTICAL") end
+        if self.healAbsBar then self.healAbsBar:SetOrientation("VERTICAL") end
+        if self.shieldAbsBar then self.shieldAbsBar:SetOrientation("VERTICAL") end
     else
         self.root:SetSize(db.w, db.hpH)
         self.hp:SetOrientation("HORIZONTAL")
+        if self.incBar then self.incBar:SetOrientation("HORIZONTAL") end
+        if self.healAbsBar then self.healAbsBar:SetOrientation("HORIZONTAL") end
+        if self.shieldAbsBar then self.shieldAbsBar:SetOrientation("HORIZONTAL") end
     end
 
     self.hp:ClearAllPoints()
