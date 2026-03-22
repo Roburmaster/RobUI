@@ -86,7 +86,7 @@ Modules/Integrations.lua
 
 combattool/buffbars.lua
 xptracker.lua
-wqtest.lua
+
 
 
 
