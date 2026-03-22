@@ -2,7 +2,7 @@
 ## Title: |cff00b3ffRobui|r
 ## Notes: UI Suite for Midnight
 ## Author: Roburmaster
-## Version: 0.7.5
+## Version: 0.7.6
 ## SavedVariables: RobuiDB, RobUIGoldDB, Robuinp, SimpleOneBagDB, rbdb, RobUIBuffBarsDB, rbardb, QuickSellDB
 ## SavedVariablesPerCharacter: XPROBDB
 ## OptionalDeps: RobHeal
