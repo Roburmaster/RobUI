@@ -1,31 +1,11 @@
 -- ============================================================================
--- ROBUI: Castbars v7.2.1  (Empower restored + rgrid hard-guard kept)
+-- ROBUI: Castbars v7.3.2
 --
--- UI:
---  - ScrollFrame settings
---  - Two-column layout
---  - Extra-only controls hidden unless editing player_extra/target_extra
---  - Exact integer value labels on sliders
---
--- Functional:
---  - Extra bars: text boxes independent of bar thickness/length
---  - Vertical only for player_extra/target_extra (Width=Thickness, Height=Length)
---  - Refresh on PLAYER_REGEN_ENABLED / ENTERING_WORLD
---  - DF+ ColorPicker API (SetupColorPickerAndShow) + legacy fallback
---  - rgrid plugin registration optional
---
--- FIX v7.2 (kept):
---  - rgrid may call frame:Show() on attached plugins.
---    We hard-guard visibility with an OnShow hook:
---      if not casting/channeling/empowering and not unlocked => immediately Hide().
---
--- FIX v7.2.1 (NEW):
---  - Evoker Empower casts restored:
---      * Registers UNIT_SPELLCAST_EMPOWER_* events
---      * Uses UnitChannelInfo() isEmpowered flag (when present)
---      * Adds bar.empowering state + OnUpdate path
---      * Adds 4-segment empower visuals + marker + alpha build-up (from v5.8)
---      * Adds hold-at-max time normalization via GetUnitEmpowerHoldAtMaxTime (ms/sec)
+-- FIX:
+-- - Cast text/time no longer parented to ShieldBar
+-- - ShieldBar alpha no longer hides text
+-- - Safe text assignment kept
+-- - DurationObject / SetTimerDuration model kept
 -- ============================================================================
 
 local addonName, ns = ...
@@ -38,10 +18,17 @@ local CB = R.Castbar
 -- WoW API locals
 local CreateFrame = CreateFrame
 local UIParent = UIParent
-local GetTime = GetTime
-local UnitCastingInfo = UnitCastingInfo
-local UnitChannelInfo = UnitChannelInfo
+local C_Timer = C_Timer
+
+local UnitExists = UnitExists
+local UnitIsDeadOrGhost = UnitIsDeadOrGhost
+local UnitCastingInfo = UnitCastingInfo or UnitSpellcastInfo
+local UnitChannelInfo = UnitChannelInfo or UnitSpellcastChannelInfo
+local UnitCastingDuration = UnitCastingDuration
+local UnitChannelDuration = UnitChannelDuration
+
 local tonumber = tonumber
+local type = type
 local pairs = pairs
 local ipairs = ipairs
 local unpack = unpack
@@ -49,9 +36,6 @@ local pcall = pcall
 local floor = math.floor
 local max = math.max
 local min = math.min
-
--- Optional (retail): hold-at-max time for empowered casts
-local GetUnitEmpowerHoldAtMaxTime = _G.GetUnitEmpowerHoldAtMaxTime
 
 -- Dropdown globals
 local UIDropDownMenu_Initialize = UIDropDownMenu_Initialize
@@ -102,48 +86,125 @@ end
 -- -----------------------------------------------------------------------------
 local DEFAULT_DB = {
     global = {
-        enabled  = true,
-        font     = "Fonts\\FRIZQT__.TTF",
-        texture  = "Interface\\Buttons\\WHITE8x8",
+        enabled = true,
+        font = "Fonts\\FRIZQT__.TTF",
+        texture = "Interface\\Buttons\\WHITE8x8",
     },
 
-    player =        { enabled=true, width=260, height=18, x=-220, y=140, color={0.20,0.70,1.00,1}, showIcon=true,  showLatency=true,  textSize=12, timeSize=12, iconSize=0 },
-    player_mini =   { enabled=true, width=200, height=14, x=-220, y=110, color={0.20,0.70,1.00,1}, showIcon=false, showLatency=false, textSize=11, timeSize=11, iconSize=0 },
-
-    -- EXTRA bars: vertical + independent text boxes
-    player_extra =  {
-        enabled=true, width=240, height=14, x=-220, y=80, color={0.20,0.70,1.00,1},
-        showIcon=false, showLatency=false,
-        vertical=false,
-        textX=0, textY=0,
-        timeX=0, timeY=0,
-        textSize=11, timeSize=11, iconSize=0,
-        textBoxW=160, textBoxH=18,
-        timeBoxW=60,  timeBoxH=18,
+    player = {
+        enabled = true,
+        width = 260,
+        height = 18,
+        x = -220,
+        y = 140,
+        color = {0.20, 0.70, 1.00, 1},
+        showIcon = true,
+        showLatency = true,
+        textSize = 12,
+        timeSize = 12,
+        iconSize = 0,
     },
 
-    target =        { enabled=true, width=260, height=18, x= 220, y=140, color={1.00,0.30,0.30,1}, showIcon=true,  showLatency=false, textSize=12, timeSize=12, iconSize=0 },
-    target_mini =   { enabled=true, width=200, height=14, x= 220, y=110, color={1.00,0.30,0.30,1}, showIcon=false, showLatency=false, textSize=11, timeSize=11, iconSize=0 },
+    player_mini = {
+        enabled = true,
+        width = 200,
+        height = 14,
+        x = -220,
+        y = 110,
+        color = {0.20, 0.70, 1.00, 1},
+        showIcon = false,
+        showLatency = false,
+        textSize = 11,
+        timeSize = 11,
+        iconSize = 0,
+    },
 
-    target_extra =  {
-        enabled=true, width=240, height=14, x=220, y=80, color={1.00,0.30,0.30,1},
-        showIcon=false, showLatency=false,
-        vertical=false,
-        textX=0, textY=0,
-        timeX=0, timeY=0,
-        textSize=11, timeSize=11, iconSize=0,
-        textBoxW=160, textBoxH=18,
-        timeBoxW=60,  timeBoxH=18,
+    player_extra = {
+        enabled = true,
+        width = 240,
+        height = 14,
+        x = -220,
+        y = 80,
+        color = {0.20, 0.70, 1.00, 1},
+        showIcon = false,
+        showLatency = false,
+        vertical = false,
+        textX = 0,
+        textY = 0,
+        timeX = 0,
+        timeY = 0,
+        textSize = 11,
+        timeSize = 11,
+        iconSize = 0,
+        textBoxW = 160,
+        textBoxH = 18,
+        timeBoxW = 60,
+        timeBoxH = 18,
+    },
+
+    target = {
+        enabled = true,
+        width = 260,
+        height = 18,
+        x = 220,
+        y = 140,
+        color = {1.00, 0.30, 0.30, 1},
+        showIcon = true,
+        showLatency = false,
+        textSize = 12,
+        timeSize = 12,
+        iconSize = 0,
+    },
+
+    target_mini = {
+        enabled = true,
+        width = 200,
+        height = 14,
+        x = 220,
+        y = 110,
+        color = {1.00, 0.30, 0.30, 1},
+        showIcon = false,
+        showLatency = false,
+        textSize = 11,
+        timeSize = 11,
+        iconSize = 0,
+    },
+
+    target_extra = {
+        enabled = true,
+        width = 240,
+        height = 14,
+        x = 220,
+        y = 80,
+        color = {1.00, 0.30, 0.30, 1},
+        showIcon = false,
+        showLatency = false,
+        vertical = false,
+        textX = 0,
+        textY = 0,
+        timeX = 0,
+        timeY = 0,
+        textSize = 11,
+        timeSize = 11,
+        iconSize = 0,
+        textBoxW = 160,
+        textBoxH = 18,
+        timeBoxW = 60,
+        timeBoxH = 18,
     },
 }
 
 local function CopyDefaults(dst, src)
     for k, v in pairs(src) do
         if type(v) == "table" then
-            if type(dst[k]) ~= "table" then dst[k] = {} end
+            if type(dst[k]) ~= "table" then
+                dst[k] = {}
+            end
             CopyDefaults(dst[k], v)
         else
-            if dst[k] == nil then dst[k] = v end
+            if dst[k] == nil then
+                dst[k] = v
+            end
         end
     end
 end
@@ -170,50 +231,54 @@ end
 -- -----------------------------------------------------------------------------
 -- Helpers
 -- -----------------------------------------------------------------------------
-local function SafeCall(fn, ...)
-    if type(fn) ~= "function" then return nil end
-    local ok, a,b,c,d,e,f,g,h,i,j,k = pcall(fn, ...)
-    if not ok then return nil end
-    return a,b,c,d,e,f,g,h,i,j,k
-end
-
-local function SafeCallNumber(fn, ...)
-    if type(fn) ~= "function" then return 0 end
-    local ok, v = pcall(fn, ...)
-    if not ok then return 0 end
-    return (type(v) == "number") and v or 0
-end
-
-local function ValidTimePair(startMs, endMs)
-    local s = tonumber(startMs)
-    local e = tonumber(endMs)
-    if type(s) ~= "number" or type(e) ~= "number" then
-        return nil, nil
-    end
-    local ok, isValid = pcall(function() return e > s end)
-    if not ok or not isValid then
-        return nil, nil
-    end
-    return s, e
+local function Clamp01(x)
+    x = tonumber(x) or 0
+    if x < 0 then return 0 end
+    if x > 1 then return 1 end
+    return x
 end
 
 local function SafeSetText(fs, txt, fallback)
     if not fs then return end
-    local ok = pcall(function() fs:SetText(txt) end)
+    local ok = pcall(fs.SetText, fs, txt)
     if not ok and fallback ~= nil then
-        pcall(function() fs:SetText(fallback) end)
+        pcall(fs.SetText, fs, fallback)
     end
 end
 
 local function SafeSetTexture(tex, val)
     if not tex then return end
-    pcall(function() tex:SetTexture(val) end)
+    pcall(tex.SetTexture, tex, val)
 end
 
-local function Clamp01(x)
-    if x < 0 then return 0 end
-    if x > 1 then return 1 end
-    return x
+local function SafeSetCastText(fs, primary, secondary, fallback)
+    if not fs then return end
+
+    if primary ~= nil then
+        local ok = pcall(fs.SetText, fs, primary)
+        if ok then return end
+        ok = pcall(fs.SetFormattedText, fs, "%s", primary)
+        if ok then return end
+    end
+
+    if secondary ~= nil then
+        local ok = pcall(fs.SetText, fs, secondary)
+        if ok then return end
+        ok = pcall(fs.SetFormattedText, fs, "%s", secondary)
+        if ok then return end
+    end
+
+    if fallback ~= nil then
+        local ok = pcall(fs.SetText, fs, fallback)
+        if ok then return end
+        pcall(fs.SetFormattedText, fs, "%s", fallback)
+    end
+end
+
+local function UnitIsCastRelevant(unit)
+    if not unit or not UnitExists(unit) then return false end
+    if UnitIsDeadOrGhost and UnitIsDeadOrGhost(unit) then return false end
+    return true
 end
 
 -- -----------------------------------------------------------------------------
@@ -242,16 +307,24 @@ local function CreateSafeBorder(parent, inset, edge, bgRGBA, borderRGBA)
     end
 
     local top = MakeEdge()
-    top:SetPoint("TOPLEFT", 0, 0); top:SetPoint("TOPRIGHT", 0, 0); top:SetHeight(edge)
+    top:SetPoint("TOPLEFT", 0, 0)
+    top:SetPoint("TOPRIGHT", 0, 0)
+    top:SetHeight(edge)
 
     local bot = MakeEdge()
-    bot:SetPoint("BOTTOMLEFT", 0, 0); bot:SetPoint("BOTTOMRIGHT", 0, 0); bot:SetHeight(edge)
+    bot:SetPoint("BOTTOMLEFT", 0, 0)
+    bot:SetPoint("BOTTOMRIGHT", 0, 0)
+    bot:SetHeight(edge)
 
     local left = MakeEdge()
-    left:SetPoint("TOPLEFT", 0, 0); left:SetPoint("BOTTOMLEFT", 0, 0); left:SetWidth(edge)
+    left:SetPoint("TOPLEFT", 0, 0)
+    left:SetPoint("BOTTOMLEFT", 0, 0)
+    left:SetWidth(edge)
 
     local right = MakeEdge()
-    right:SetPoint("TOPRIGHT", 0, 0); right:SetPoint("BOTTOMRIGHT", 0, 0); right:SetWidth(edge)
+    right:SetPoint("TOPRIGHT", 0, 0)
+    right:SetPoint("BOTTOMRIGHT", 0, 0)
+    right:SetWidth(edge)
 
     parent.__bTop, parent.__bBot, parent.__bLeft, parent.__bRight = top, bot, left, right
 end
@@ -268,34 +341,25 @@ local function CreateFontString(f, align, size)
 end
 
 -- -----------------------------------------------------------------------------
--- EMPOWER VISUALS (from v5.8)
+-- EMPOWER VISUALS (safe simplified version)
 -- -----------------------------------------------------------------------------
 local EMPOWER_SEGMENT_COLORS = {
-    { r = 0.30, g = 0.80, b = 1.00, a = 0.95 }, -- 1
-    { r = 0.45, g = 1.00, b = 0.45, a = 0.95 }, -- 2
-    { r = 1.00, g = 0.92, b = 0.25, a = 0.95 }, -- 3
-    { r = 1.00, g = 0.45, b = 0.20, a = 0.95 }, -- 4
+    { r = 0.30, g = 0.80, b = 1.00, a = 0.22 },
+    { r = 0.45, g = 1.00, b = 0.45, a = 0.22 },
+    { r = 1.00, g = 0.92, b = 0.25, a = 0.22 },
+    { r = 1.00, g = 0.45, b = 0.20, a = 0.22 },
 }
 
-local EMPOWER_SEP_COLOR = { r=0, g=0, b=0, a=0.35 }
+local EMPOWER_SEP_COLOR = { r = 0, g = 0, b = 0, a = 0.35 }
 local EMPOWER_SEP_WIDTH = 1
-
-local EMPOWER_ALPHA_BASE        = 0.18
-local EMPOWER_ALPHA_REACHED     = 0.70
-local EMPOWER_ALPHA_CURRENT_MIN = 0.35
-local EMPOWER_ALPHA_CURRENT_MAX = 1.00
-local EMPOWER_FILL_ALPHA_BOOST  = 1.10
-
-local EMPOWER_SHOW_MARKER = true
-local EMPOWER_MARKER_COLOR = { r=1, g=1, b=1, a=0.85 }
-local EMPOWER_MARKER_WIDTH = 1
 
 local function EnsureEmpowerVisuals(bar)
     if bar.__empower then return end
-    bar.__empower = {}
 
+    bar.__empower = {}
     bar.__empower.baseSeg = {}
-    for i=1,4 do
+
+    for i = 1, 4 do
         local t = bar:CreateTexture(nil, "ARTWORK", nil, 1)
         t:SetTexture("Interface\\Buttons\\WHITE8x8")
         t:Hide()
@@ -303,54 +367,30 @@ local function EnsureEmpowerVisuals(bar)
     end
 
     bar.__empower.baseSep = {}
-    for i=1,3 do
+    for i = 1, 3 do
         local s = bar:CreateTexture(nil, "OVERLAY", nil, 2)
         s:SetTexture("Interface\\Buttons\\WHITE8x8")
         s:SetVertexColor(EMPOWER_SEP_COLOR.r, EMPOWER_SEP_COLOR.g, EMPOWER_SEP_COLOR.b, EMPOWER_SEP_COLOR.a)
         s:Hide()
         bar.__empower.baseSep[i] = s
     end
-
-    local clip = CreateFrame("Frame", nil, bar)
-    clip:SetClipsChildren(true)
-    clip:SetFrameLevel(bar:GetFrameLevel() + 2)
-    clip:Show()
-    bar.__empower.clip = clip
-
-    bar.__empower.fillSeg = {}
-    for i=1,4 do
-        local t = clip:CreateTexture(nil, "ARTWORK", nil, 1)
-        t:SetTexture("Interface\\Buttons\\WHITE8x8")
-        t:Hide()
-        bar.__empower.fillSeg[i] = t
-    end
-
-    bar.__empower.fillSep = {}
-    for i=1,3 do
-        local s = clip:CreateTexture(nil, "OVERLAY", nil, 2)
-        s:SetTexture("Interface\\Buttons\\WHITE8x8")
-        s:SetVertexColor(EMPOWER_SEP_COLOR.r, EMPOWER_SEP_COLOR.g, EMPOWER_SEP_COLOR.b, EMPOWER_SEP_COLOR.a)
-        s:Hide()
-        bar.__empower.fillSep[i] = s
-    end
-
-    if EMPOWER_SHOW_MARKER then
-        local m = bar:CreateTexture(nil, "OVERLAY", nil, 7)
-        m:SetTexture("Interface\\Buttons\\WHITE8x8")
-        m:SetVertexColor(EMPOWER_MARKER_COLOR.r, EMPOWER_MARKER_COLOR.g, EMPOWER_MARKER_COLOR.b, EMPOWER_MARKER_COLOR.a)
-        m:Hide()
-        bar.__empower.marker = m
-    end
 end
 
 local function HideEmpowerVisuals(bar)
     if not bar.__empower then return end
     local e = bar.__empower
-    if e.baseSeg then for _, t in ipairs(e.baseSeg) do t:Hide() end end
-    if e.baseSep then for _, s in ipairs(e.baseSep) do s:Hide() end end
-    if e.fillSeg then for _, t in ipairs(e.fillSeg) do t:Hide() end end
-    if e.fillSep then for _, s in ipairs(e.fillSep) do s:Hide() end end
-    if e.marker then e.marker:Hide() end
+
+    if e.baseSeg then
+        for _, t in ipairs(e.baseSeg) do
+            t:Hide()
+        end
+    end
+
+    if e.baseSep then
+        for _, s in ipairs(e.baseSep) do
+            s:Hide()
+        end
+    end
 end
 
 local function LayoutEmpower4Segments(bar)
@@ -363,19 +403,19 @@ local function LayoutEmpower4Segments(bar)
 
     local segW = W * 0.25
 
-    for i=1,4 do
+    for i = 1, 4 do
         local t = e.baseSeg[i]
         local c = EMPOWER_SEGMENT_COLORS[i]
-        t:SetVertexColor(c.r, c.g, c.b, (c.a or 1) * EMPOWER_ALPHA_BASE)
+        t:SetVertexColor(c.r, c.g, c.b, c.a or 0.22)
         t:SetWidth(segW)
         t:SetHeight(H)
         t:ClearAllPoints()
-        t:SetPoint("TOPLEFT", bar, "TOPLEFT", (i-1)*segW, 0)
-        t:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", (i-1)*segW, 0)
+        t:SetPoint("TOPLEFT", bar, "TOPLEFT", (i - 1) * segW, 0)
+        t:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", (i - 1) * segW, 0)
         t:Show()
     end
 
-    for i=1,3 do
+    for i = 1, 3 do
         local s = e.baseSep[i]
         local px = i * segW
         s:SetWidth(EMPOWER_SEP_WIDTH)
@@ -384,92 +424,6 @@ local function LayoutEmpower4Segments(bar)
         s:SetPoint("TOP", bar, "TOPLEFT", px, 0)
         s:SetPoint("BOTTOM", bar, "BOTTOMLEFT", px, 0)
         s:Show()
-    end
-
-    local clip = e.clip
-    for i=1,4 do
-        local t = e.fillSeg[i]
-        local c = EMPOWER_SEGMENT_COLORS[i]
-        t:SetVertexColor(c.r, c.g, c.b, (c.a or 1) * math.min(1, EMPOWER_ALPHA_BASE * EMPOWER_FILL_ALPHA_BOOST))
-        t:SetWidth(segW)
-        t:SetHeight(H)
-        t:ClearAllPoints()
-        t:SetPoint("TOPLEFT", clip, "TOPLEFT", (i-1)*segW, 0)
-        t:SetPoint("BOTTOMLEFT", clip, "BOTTOMLEFT", (i-1)*segW, 0)
-        t:Show()
-    end
-
-    for i=1,3 do
-        local s = e.fillSep[i]
-        local px = i * segW
-        s:SetWidth(EMPOWER_SEP_WIDTH)
-        s:SetHeight(H)
-        s:ClearAllPoints()
-        s:SetPoint("TOP", clip, "TOPLEFT", px, 0)
-        s:SetPoint("BOTTOM", clip, "BOTTOMLEFT", px, 0)
-        s:Show()
-    end
-end
-
-local function UpdateEmpowerClipAndMarker(bar, progress01)
-    if not (bar.__empower and bar.__empower.clip) then return end
-    local e = bar.__empower
-
-    local W = bar:GetWidth() or 0
-    local H = bar:GetHeight() or 0
-    if W <= 0 or H <= 0 then return end
-
-    local p = Clamp01(progress01 or 0)
-    local w = W * p
-
-    local clip = e.clip
-    clip:ClearAllPoints()
-    clip:SetHeight(H)
-    clip:SetWidth(w)
-    clip:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, 0)
-    clip:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", 0, 0)
-
-    if e.marker then
-        e.marker:SetWidth(EMPOWER_MARKER_WIDTH)
-        e.marker:SetHeight(H)
-        e.marker:ClearAllPoints()
-        e.marker:SetPoint("TOP", bar, "TOPLEFT", w, 0)
-        e.marker:SetPoint("BOTTOM", bar, "BOTTOMLEFT", w, 0)
-        e.marker:Show()
-    end
-end
-
-local function UpdateEmpowerSegmentAlpha(bar, progress01)
-    if not (bar and bar.empowering and bar.__empower) then return end
-    local e = bar.__empower
-
-    local build = Clamp01(progress01 or 0)
-
-    local segIndex = floor(build * 4) + 1
-    if segIndex < 1 then segIndex = 1 end
-    if segIndex > 4 then segIndex = 4 end
-
-    local segStart = (segIndex - 1) / 4
-    local segProg = Clamp01((build - segStart) * 4)
-
-    for i=1,4 do
-        local c = EMPOWER_SEGMENT_COLORS[i]
-        local a
-
-        if i < segIndex then
-            a = EMPOWER_ALPHA_REACHED
-        elseif i == segIndex then
-            a = EMPOWER_ALPHA_CURRENT_MIN + (EMPOWER_ALPHA_CURRENT_MAX - EMPOWER_ALPHA_CURRENT_MIN) * segProg
-        else
-            a = EMPOWER_ALPHA_BASE
-        end
-
-        if e.baseSeg and e.baseSeg[i] then
-            e.baseSeg[i]:SetVertexColor(c.r, c.g, c.b, (c.a or 1) * a)
-        end
-        if e.fillSeg and e.fillSeg[i] then
-            e.fillSeg[i]:SetVertexColor(c.r, c.g, c.b, (c.a or 1) * min(1, a * EMPOWER_FILL_ALPHA_BOOST))
-        end
     end
 end
 
@@ -497,9 +451,9 @@ local function ApplyTextLayout(bar, key, db)
         local mbh = tonumber(db.timeBoxH) or 18
 
         tbw = max(20, floor(tbw + 0.5))
-        tbh = max(8,  floor(tbh + 0.5))
+        tbh = max(8, floor(tbh + 0.5))
         mbw = max(20, floor(mbw + 0.5))
-        mbh = max(8,  floor(mbh + 0.5))
+        mbh = max(8, floor(mbh + 0.5))
 
         bar.Text:SetWidth(tbw)
         bar.Text:SetHeight(tbh)
@@ -509,31 +463,38 @@ local function ApplyTextLayout(bar, key, db)
         if vertical then
             bar.Text:SetJustifyH("CENTER")
             bar.Time:SetJustifyH("CENTER")
-            bar.Text:SetPoint("CENTER", bar, "CENTER", tx, ty)
-            bar.Time:SetPoint("CENTER", bar, "CENTER", timex, timey)
+            bar.Text:SetPoint("CENTER", bar.TextHolder, "CENTER", tx, ty)
+            bar.Time:SetPoint("CENTER", bar.TextHolder, "CENTER", timex, timey)
         else
             bar.Text:SetJustifyH("LEFT")
             bar.Time:SetJustifyH("RIGHT")
-            bar.Text:SetPoint("LEFT", bar, "LEFT", 4 + tx, ty)
-            bar.Time:SetPoint("RIGHT", bar, "RIGHT", -4 + timex, timey)
+            bar.Text:SetPoint("LEFT", bar.TextHolder, "LEFT", 4 + tx, ty)
+            bar.Time:SetPoint("RIGHT", bar.TextHolder, "RIGHT", -4 + timex, timey)
         end
         return
     end
 
     bar.Text:SetJustifyH("LEFT")
     bar.Time:SetJustifyH("RIGHT")
-    bar.Text:SetPoint("LEFT", bar, "LEFT", 4, 0)
-    bar.Time:SetPoint("RIGHT", bar, "RIGHT", -4, 0)
+    bar.Text:SetPoint("LEFT", bar.TextHolder, "LEFT", 4, 0)
+    bar.Time:SetPoint("RIGHT", bar.TextHolder, "RIGHT", -4, 0)
     bar.Text:SetWidth(160)
 end
 
 local function ApplyOrientation(bar, key, db)
     if not bar then return end
     local vertical = (IsExtraKey(key) and db and db.vertical) and true or false
+
     if vertical then
         pcall(bar.SetOrientation, bar, "VERTICAL")
+        if bar.ShieldBar then
+            pcall(bar.ShieldBar.SetOrientation, bar.ShieldBar, "VERTICAL")
+        end
     else
         pcall(bar.SetOrientation, bar, "HORIZONTAL")
+        if bar.ShieldBar then
+            pcall(bar.ShieldBar.SetOrientation, bar.ShieldBar, "HORIZONTAL")
+        end
     end
 end
 
@@ -544,9 +505,9 @@ local function ComputeIconSize(key, db)
         return max(4, floor(override + 0.5))
     end
     if vertical then
-        return max(4, floor((tonumber(db.width) or 14) + 0.5)) -- thickness
+        return max(4, floor((tonumber(db.width) or 14) + 0.5))
     end
-    return max(4, floor((tonumber(db.height) or 14) + 0.5)) -- height
+    return max(4, floor((tonumber(db.height) or 14) + 0.5))
 end
 
 -- -----------------------------------------------------------------------------
@@ -556,6 +517,7 @@ local function UpdateBarLayout(key)
     local bar = bars[key]
     local dbAll = GetDB()
     if not dbAll then return end
+
     local db = dbAll[key]
     if not bar or not db then return end
 
@@ -569,21 +531,32 @@ local function UpdateBarLayout(key)
         return
     end
 
-    bar:SetStatusBarTexture(dbAll.global.texture or "Interface\\Buttons\\WHITE8x8")
-    bar:SetSize(db.width, db.height)
+    local tex = dbAll.global.texture or "Interface\\Buttons\\WHITE8x8"
 
+    bar:SetStatusBarTexture(tex)
+    if bar.ShieldBar then
+        bar.ShieldBar:SetStatusBarTexture(tex)
+    end
+
+    bar:SetSize(db.width, db.height)
+    if bar.TextHolder then
+        bar.TextHolder:SetAllPoints(bar)
+    end
     ApplyOrientation(bar, key, db)
 
     local pluginId = bar.__gridPluginId
     local attachedToGrid = (type(pluginId) == "string" and pluginId ~= "" and GridIsAttached(pluginId)) and true or false
+
     if not attachedToGrid then
         bar:ClearAllPoints()
         bar:SetPoint("BOTTOM", UIParent, "BOTTOM", db.x, db.y)
     end
 
     if type(db.color) == "table" then
+        bar._defaultColor = db.color
         bar:SetStatusBarColor(unpack(db.color))
     else
+        bar._defaultColor = {1, 1, 1, 1}
         bar:SetStatusBarColor(1, 1, 1, 1)
     end
 
@@ -603,40 +576,44 @@ local function UpdateBarLayout(key)
     end
 
     if bar.SafeZone then
-        if db.showLatency and not CB.isUnlocked then bar.SafeZone:Show() else bar.SafeZone:Hide() end
+        bar.SafeZone:Hide()
     end
 
     local font = dbAll.global.font or "Fonts\\FRIZQT__.TTF"
-    local tSize = tonumber(db.textSize); if type(tSize) ~= "number" then tSize = 11 end
-    local tiSize = tonumber(db.timeSize); if type(tiSize) ~= "number" then tiSize = tSize end
+    local tSize = tonumber(db.textSize)
+    if type(tSize) ~= "number" then tSize = 11 end
+    local tiSize = tonumber(db.timeSize)
+    if type(tiSize) ~= "number" then tiSize = tSize end
+
     tSize = max(6, min(32, floor(tSize + 0.5)))
     tiSize = max(6, min(32, floor(tiSize + 0.5)))
 
     bar.Text:SetFont(font, tSize, "OUTLINE")
     bar.Time:SetFont(font, tiSize, "OUTLINE")
-
     ApplyTextLayout(bar, key, db)
 
     if CB.isUnlocked then
         bar:Show()
         bar:SetAlpha(1)
         bar:SetValue(1)
-        bar.Text:SetText(key:upper())
-        bar.Time:SetText(attachedToGrid and "rgrid" or "Move Me")
-        bar.Spark:Hide()
-        bar.Icon:SetTexture(134400)
+        SafeSetText(bar.Text, key:upper(), key:upper())
+        SafeSetText(bar.Time, attachedToGrid and "rgrid" or "Move Me", "Move Me")
+        if bar.Spark then bar.Spark:Hide() end
+        SafeSetTexture(bar.Icon, 134400)
         bar:EnableMouse(not attachedToGrid)
-
         HideEmpowerVisuals(bar)
         return
     end
 
     bar:EnableMouse(false)
-    if not bar.casting and not bar.channeling and not bar.empowering then
+
+    if not bar.castState then
         bar:Hide()
+        HideEmpowerVisuals(bar)
+        return
     end
 
-    if bar.empowering then
+    if bar.castState.kind == "empower" then
         LayoutEmpower4Segments(bar)
     else
         HideEmpowerVisuals(bar)
@@ -650,13 +627,23 @@ local function CreateCastbarFrame(key, unit)
     local db = GetDB()
     local texture = (db and db.global and db.global.texture) or "Interface\\Buttons\\WHITE8x8"
 
-    local bar = CreateFrame("StatusBar", "RobUI_"..key, UIParent)
+    local bar = CreateFrame("StatusBar", "RobUI_" .. key, UIParent)
     bar:SetStatusBarTexture(texture)
     bar:SetFrameStrata("HIGH")
-
     bar:SetMovable(true)
     bar:SetClampedToScreen(true)
     bar:RegisterForDrag("LeftButton")
+
+    bar.ShieldBar = CreateFrame("StatusBar", nil, bar)
+    bar.ShieldBar:SetAllPoints(bar)
+    bar.ShieldBar:SetStatusBarTexture(texture)
+    bar.ShieldBar:SetStatusBarColor(0.5, 0.5, 0.5, 1)
+    bar.ShieldBar:SetFrameLevel(bar:GetFrameLevel() + 1)
+    bar.ShieldBar:SetAlpha(0)
+
+    bar.TextHolder = CreateFrame("Frame", nil, bar)
+    bar.TextHolder:SetAllPoints(bar)
+    bar.TextHolder:SetFrameLevel(bar:GetFrameLevel() + 3)
 
     bar:SetScript("OnDragStart", function(self)
         if not CB.isUnlocked then return end
@@ -680,8 +667,10 @@ local function CreateCastbarFrame(key, unit)
             local screenWidth = UIParent:GetSize()
             local x = centerX - (screenWidth / 2)
             local y = self:GetBottom()
+
             dbAll[key].x = floor(x)
             dbAll[key].y = floor(y)
+
             UpdateBarLayout(key)
             if CB.SettingsPanel and CB.SettingsPanel.RefreshSection then
                 CB.SettingsPanel:RefreshSection()
@@ -690,23 +679,26 @@ local function CreateCastbarFrame(key, unit)
     end)
 
     bar:Hide()
-    CreateSafeBorder(bar, 0, 1, {0.1,0.1,0.1,0.9}, {0,0,0,1})
+
+    CreateSafeBorder(bar, 0, 1, {0.1, 0.1, 0.1, 0.9}, {0, 0, 0, 1})
 
     bar.Icon = bar:CreateTexture(nil, "ARTWORK")
     bar.Icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
     bar.iconBorder = CreateFrame("Frame", nil, bar)
-    bar.iconBorder:SetFrameLevel(bar:GetFrameLevel() + 1)
-    CreateSafeBorder(bar.iconBorder, 0, 1, {0,0,0,0}, {0,0,0,1})
+    bar.iconBorder:SetFrameLevel(bar:GetFrameLevel() + 2)
+    CreateSafeBorder(bar.iconBorder, 0, 1, {0, 0, 0, 0}, {0, 0, 0, 1})
 
-    bar.Text = CreateFontString(bar, "LEFT", 10)
-    bar.Time = CreateFontString(bar, "RIGHT", 10)
+    -- IMPORTANT FIX: text is NOT parented to ShieldBar
+    bar.Text = CreateFontString(bar.TextHolder, "LEFT", 10)
+    bar.Time = CreateFontString(bar.TextHolder, "RIGHT", 10)
     bar.Text:SetDrawLayer("OVERLAY", 7)
     bar.Time:SetDrawLayer("OVERLAY", 7)
 
     bar.Spark = bar:CreateTexture(nil, "OVERLAY")
     bar.Spark:SetColorTexture(1, 1, 1, 0.8)
     bar.Spark:SetBlendMode("ADD")
+    bar.Spark:Hide()
 
     if unit == "player" then
         bar.SafeZone = bar:CreateTexture(nil, "BACKGROUND")
@@ -716,14 +708,13 @@ local function CreateCastbarFrame(key, unit)
 
     bar.key = key
     bar.unit = unit
-    bar.casting, bar.channeling, bar.empowering = false, false, false
-    bar.startTime, bar.endTime = nil, nil
+    bar.castState = nil
+    bar._defaultColor = {1, 1, 1, 1}
 
-    -- FIX: rgrid (or others) may call :Show() on attached plugin frames.
-    -- We hard-guard visibility so idle bars can NEVER be forced visible.
+    -- Hard guard against external Show() while idle
     bar:HookScript("OnShow", function(self)
         if CB.isUnlocked then return end
-        if not self.casting and not self.channeling and not self.empowering then
+        if not self.castState then
             self:Hide()
         end
     end)
@@ -733,208 +724,116 @@ local function CreateCastbarFrame(key, unit)
 end
 
 -- -----------------------------------------------------------------------------
--- Cast logic
+-- Secure cast state retrieval
+-- -----------------------------------------------------------------------------
+local function GetUnitCastState(unit)
+    if not UnitIsCastRelevant(unit) then return nil end
+
+    local durObj = UnitCastingDuration and UnitCastingDuration(unit)
+    if durObj then
+        local name, text, texture, _, _, _, _, notInterruptible = UnitCastingInfo(unit)
+        return {
+            kind = "cast",
+            name = name,
+            text = text,
+            texture = texture,
+            notInterruptible = notInterruptible,
+            durationObject = durObj,
+        }
+    end
+
+    local cdurObj = UnitChannelDuration and UnitChannelDuration(unit)
+    if cdurObj then
+        local cname, ctext, ctexture, _, _, _, _, cnotInterruptible, isEmpowered = UnitChannelInfo(unit)
+        return {
+            kind = isEmpowered and "empower" or "channel",
+            name = cname,
+            text = ctext,
+            texture = ctexture,
+            notInterruptible = cnotInterruptible,
+            durationObject = cdurObj,
+        }
+    end
+
+    return nil
+end
+
+-- -----------------------------------------------------------------------------
+-- Active updates (safe)
 -- -----------------------------------------------------------------------------
 local function StopBar(self)
     if not self then return end
-    if self.Spark then self.Spark:Hide() end
-    HideEmpowerVisuals(self)
-    self.casting, self.channeling, self.empowering = false, false, false
-    self.startTime, self.endTime = nil, nil
+
+    self.castState = nil
     self:SetScript("OnUpdate", nil)
+
+    if self.Spark then
+        self.Spark:Hide()
+    end
+
+    HideEmpowerVisuals(self)
     self:Hide()
 end
 
-local function PlaceSpark(self, progress01)
-    if not (self and self.Spark) then return end
-    local p = Clamp01(progress01 or 0)
-    self.Spark:ClearAllPoints()
-
-    local vertical = IsVerticalKey(self.key)
-    if vertical then
-        local w = self:GetWidth() or 10
-        local h = self:GetHeight() or 1
-        self.Spark:SetSize(max(2, w), 2)
-        self.Spark:SetPoint("CENTER", self, "BOTTOM", 0, p * h)
-    else
-        local w = self:GetWidth() or 1
-        local h = self:GetHeight() or 10
-        self.Spark:SetSize(2, max(2, h))
-        self.Spark:SetPoint("CENTER", self, "LEFT", p * w, 0)
-    end
-end
-
-local function OnUpdateActive(self, elapsed)
+local function OnUpdateActive(self)
     if CB.isUnlocked then return end
 
-    self.__acc = (self.__acc or 0) + (elapsed or 0)
-    if self.__acc < 0.05 then return end
-    self.__acc = 0
-
-    local now = GetTime()
-
-    if self.casting then
-        local startT = self.startTime
-        local endT   = self.endTime
-        if type(startT) ~= "number" or type(endT) ~= "number" or endT <= startT then
-            StopBar(self); return
-        end
-
-        if now >= endT then
-            self:SetMinMaxValues(startT, endT)
-            self:SetValue(endT)
-            self.Time:SetFormattedText("%.1f", 0)
-            PlaceSpark(self, 1)
-            StopBar(self)
-            return
-        end
-
-        local progress = Clamp01((now - startT) / (endT - startT))
-        local remain = endT - now; if remain < 0 then remain = 0 end
-
-        self:SetMinMaxValues(startT, endT)
-        self:SetValue(now)
-        self.Time:SetFormattedText("%.1f", remain)
-        PlaceSpark(self, progress)
+    local state = self.castState
+    if not state or not state.durationObject then
+        StopBar(self)
         return
     end
 
-    if self.empowering then
-        local startT = self.startTime
-        local endT   = self.endTime
-        if type(startT) ~= "number" or type(endT) ~= "number" or endT <= startT then
-            StopBar(self); return
-        end
+    pcall(function()
+        self.Time:SetFormattedText("%.1f", state.durationObject:GetRemainingDuration())
+    end)
+end
 
-        if now >= endT then
-            self:SetMinMaxValues(0, 1)
-            self:SetValue(1)
-            self.Time:SetFormattedText("%.1f", 0)
-            PlaceSpark(self, 1)
-            UpdateEmpowerClipAndMarker(self, 1)
-            UpdateEmpowerSegmentAlpha(self, 1)
-            StopBar(self)
-            return
-        end
+local function ApplyStateToBar(self, state)
+    if not (self and state and state.durationObject) then return false end
 
-        local progress = Clamp01((now - startT) / (endT - startT))
-        local remain = endT - now; if remain < 0 then remain = 0 end
+    self.castState = state
 
-        self:SetMinMaxValues(0, 1)
-        self:SetValue(progress)
-        self.Time:SetFormattedText("%.1f", remain)
-        PlaceSpark(self, progress)
-
-        UpdateEmpowerClipAndMarker(self, progress)
-        UpdateEmpowerSegmentAlpha(self, progress)
-        return
+    if self.ShieldBar and self.ShieldBar.SetAlphaFromBoolean then
+        pcall(self.ShieldBar.SetAlphaFromBoolean, self.ShieldBar, state.notInterruptible, 1, 0)
+    elseif self.ShieldBar then
+        self.ShieldBar:SetAlpha(0)
     end
 
-    if self.channeling then
-        local startT = self.startTime
-        local endT   = self.endTime
-        if type(startT) ~= "number" or type(endT) ~= "number" or endT <= startT then
-            StopBar(self); return
-        end
+    SafeSetCastText(self.Text, state.name, state.text, "")
+    SafeSetTexture(self.Icon, state.texture)
 
-        if now >= endT then
-            self.Time:SetFormattedText("%.1f", 0)
-            StopBar(self)
-            return
-        end
-
-        local remain = endT - now; if remain < 0 then remain = 0 end
-        local progress = Clamp01((now - startT) / (endT - startT))
-
-        self:SetMinMaxValues(0, endT - startT)
-        self:SetValue(remain)
-        self.Time:SetFormattedText("%.1f", remain)
-        PlaceSpark(self, progress)
-        return
+    if self.SetTimerDuration then
+        pcall(self.SetTimerDuration, self, state.durationObject)
+    end
+    if self.ShieldBar and self.ShieldBar.SetTimerDuration then
+        pcall(self.ShieldBar.SetTimerDuration, self.ShieldBar, state.durationObject)
     end
 
-    self:SetScript("OnUpdate", nil)
+    if self.Spark then
+        self.Spark:Hide()
+    end
+
+    if state.kind == "empower" then
+        LayoutEmpower4Segments(self)
+    else
+        HideEmpowerVisuals(self)
+    end
+
+    self:SetAlpha(1)
+    self:Show()
+    self:SetScript("OnUpdate", OnUpdateActive)
+    OnUpdateActive(self)
+    return true
 end
 
 local function StartOrUpdateFromUnit(self)
-    local now = GetTime()
-
-    -- CAST
-    local name, text, texture, startMs, endMs = SafeCall(UnitCastingInfo, self.unit)
-    local sMs, eMs = ValidTimePair(startMs, endMs)
-    if name and sMs and eMs then
-        self.casting, self.channeling, self.empowering = true, false, false
-        HideEmpowerVisuals(self)
-
-        self.startTime = sMs / 1000
-        self.endTime   = eMs / 1000
-
-        self:SetMinMaxValues(self.startTime, self.endTime)
-        self:SetValue(now)
-
-        SafeSetText(self.Text, text or name, "CAST")
-        SafeSetTexture(self.Icon, texture)
-
-        self.Spark:Show()
-        self:SetAlpha(1)
-        self:Show()
-
-        self.__acc = 0
-        self:SetScript("OnUpdate", OnUpdateActive)
-        return true
+    local state = GetUnitCastState(self.unit)
+    if not state then
+        StopBar(self)
+        return false
     end
-
-    -- CHANNEL (includes Empowered channels if client provides isEmpowered)
-    local cname, ctext, ctexture, cstartMs, cendMs, _, _, _, isEmpowered = SafeCall(UnitChannelInfo, self.unit)
-    local csMs, ceMs = ValidTimePair(cstartMs, cendMs)
-    if cname and csMs and ceMs then
-        local empower = (isEmpowered and true) or false
-
-        self.casting = false
-        self.channeling = not empower
-        self.empowering = empower
-
-        self.startTime = csMs / 1000
-        self.endTime   = ceMs / 1000
-
-        -- Empower: include hold-at-max if available; normalize ms/sec
-        if empower and type(GetUnitEmpowerHoldAtMaxTime) == "function" then
-            local hold = SafeCallNumber(GetUnitEmpowerHoldAtMaxTime, self.unit)
-            if hold > 100 then hold = hold / 1000 end
-            if hold > 0 then
-                self.endTime = self.endTime + hold
-            end
-        end
-
-        if empower then
-            LayoutEmpower4Segments(self)
-
-            self:SetMinMaxValues(0, 1)
-            self:SetValue(0)
-            UpdateEmpowerClipAndMarker(self, 0)
-            UpdateEmpowerSegmentAlpha(self, 0)
-        else
-            HideEmpowerVisuals(self)
-
-            local dur = self.endTime - self.startTime
-            if dur <= 0 then dur = 0.01 end
-            self:SetMinMaxValues(0, dur)
-            self:SetValue(self.endTime - now)
-        end
-
-        SafeSetText(self.Text, ctext or cname, empower and "EMPOWER" or "CHANNEL")
-        SafeSetTexture(self.Icon, ctexture)
-
-        self.Spark:Show()
-        self:SetAlpha(1)
-        self:Show()
-
-        self.__acc = 0
-        self:SetScript("OnUpdate", OnUpdateActive)
-        return true
-    end
-
-    return false
+    return ApplyStateToBar(self, state)
 end
 
 -- -----------------------------------------------------------------------------
@@ -945,7 +844,6 @@ local STOP_EVENTS = {
     UNIT_SPELLCAST_FAILED = true,
     UNIT_SPELLCAST_INTERRUPTED = true,
     UNIT_SPELLCAST_CHANNEL_STOP = true,
-
     UNIT_SPELLCAST_EMPOWER_STOP = true,
 }
 
@@ -955,13 +853,15 @@ local UPDATE_ONLY_EVENTS = {
     UNIT_SPELLCAST_NOT_INTERRUPTIBLE = true,
     UNIT_SPELLCAST_CHANNEL_UPDATE = true,
     UNIT_SPELLCAST_SUCCEEDED = true,
-
     UNIT_SPELLCAST_EMPOWER_UPDATE = true,
 }
 
 local function OnEvent(self, event, unit)
     if CB.isUnlocked then return end
-    if unit and unit ~= self.unit then return end
+
+    if unit and unit ~= self.unit then
+        return
+    end
 
     local dbAll = GetDB()
     if not dbAll or not (dbAll.global and dbAll.global.enabled) then
@@ -976,7 +876,19 @@ local function OnEvent(self, event, unit)
     end
 
     if event == "PLAYER_REGEN_ENABLED" or event == "PLAYER_ENTERING_WORLD" then
-        if not StartOrUpdateFromUnit(self) then StopBar(self) end
+        if not StartOrUpdateFromUnit(self) then
+            StopBar(self)
+        end
+        return
+    end
+
+    if event == "PLAYER_TARGET_CHANGED" then
+        if self.unit ~= "target" then
+            return
+        end
+        if not StartOrUpdateFromUnit(self) then
+            StopBar(self)
+        end
         return
     end
 
@@ -985,12 +897,7 @@ local function OnEvent(self, event, unit)
         return
     end
 
-    if event == "PLAYER_TARGET_CHANGED" then
-        if self.unit ~= "target" then return end
-    end
-
-    -- Update-events must NOT start a new bar (prevents bogus starts)
-    if UPDATE_ONLY_EVENTS[event] and (not self.casting and not self.channeling and not self.empowering) then
+    if UPDATE_ONLY_EVENTS[event] and (not self.castState) then
         return
     end
 
@@ -1004,19 +911,33 @@ end
 -- -----------------------------------------------------------------------------
 function CB:ToggleTestMode()
     CB.isUnlocked = not CB.isUnlocked
-    for key, _ in pairs(bars) do
+    for key in pairs(bars) do
         UpdateBarLayout(key)
     end
 end
 
 local function EnableBlizzardCastbar()
-    if CastingBarFrame then pcall(function() CastingBarFrame:Show() end) end
-    if PlayerCastingBarFrame then pcall(function() PlayerCastingBarFrame:Show() end) end
+    if CastingBarFrame then
+        pcall(function() CastingBarFrame:Show() end)
+    end
+    if PlayerCastingBarFrame then
+        pcall(function() PlayerCastingBarFrame:Show() end)
+    end
 end
 
 local function DisableBlizzardCastbar()
-    if CastingBarFrame then pcall(function() CastingBarFrame:UnregisterAllEvents(); CastingBarFrame:Hide() end) end
-    if PlayerCastingBarFrame then pcall(function() PlayerCastingBarFrame:UnregisterAllEvents(); PlayerCastingBarFrame:Hide() end) end
+    if CastingBarFrame then
+        pcall(function()
+            CastingBarFrame:UnregisterAllEvents()
+            CastingBarFrame:Hide()
+        end)
+    end
+    if PlayerCastingBarFrame then
+        pcall(function()
+            PlayerCastingBarFrame:UnregisterAllEvents()
+            PlayerCastingBarFrame:Hide()
+        end)
+    end
 end
 
 function CB:ApplyGlobalEnabledState()
@@ -1028,6 +949,7 @@ function CB:ApplyGlobalEnabledState()
             bar:UnregisterAllEvents()
             bar:SetScript("OnUpdate", nil)
             bar:SetScript("OnEvent", nil)
+            bar.castState = nil
             bar:Hide()
         end
         EnableBlizzardCastbar()
@@ -1050,7 +972,6 @@ function CB:ApplyGlobalEnabledState()
         bar:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_UPDATE", bar.unit)
         bar:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_STOP", bar.unit)
 
-        -- Empowered casts (Evoker)
         bar:RegisterUnitEvent("UNIT_SPELLCAST_EMPOWER_START", bar.unit)
         bar:RegisterUnitEvent("UNIT_SPELLCAST_EMPOWER_UPDATE", bar.unit)
         bar:RegisterUnitEvent("UNIT_SPELLCAST_EMPOWER_STOP", bar.unit)
@@ -1093,8 +1014,15 @@ local function RegisterCastbarPlugins()
 
         GridRegister(pluginId, {
             name = name or key,
-            default = { gx = gx or 0, gy = gy or 0, group = GRID_GROUP_CASTBARS or 0, label = name or key },
-            build = function() return bars[key] end,
+            default = {
+                gx = gx or 0,
+                gy = gy or 0,
+                group = GRID_GROUP_CASTBARS or 0,
+                label = name or key,
+            },
+            build = function()
+                return bars[key]
+            end,
             setScale = function(frame, scale)
                 if not frame or not frame.SetScale then return end
                 pcall(frame.SetScale, frame, tonumber(scale) or 1)
@@ -1105,17 +1033,16 @@ local function RegisterCastbarPlugins()
         UpdateBarLayout(key)
     end
 
-    reg("player",       "Castbar: Player",       -220,  140)
-    reg("player_mini",  "Castbar: Player Mini",  -220,  110)
-    reg("player_extra", "Castbar: Player Extra", -220,   80)
-
-    reg("target",       "Castbar: Target",        220,  140)
-    reg("target_mini",  "Castbar: Target Mini",   220,  110)
-    reg("target_extra", "Castbar: Target Extra",  220,   80)
+    reg("player",       "Castbar: Player",       -220, 140)
+    reg("player_mini",  "Castbar: Player Mini",  -220, 110)
+    reg("player_extra", "Castbar: Player Extra", -220, 80)
+    reg("target",       "Castbar: Target",        220, 140)
+    reg("target_mini",  "Castbar: Target Mini",   220, 110)
+    reg("target_extra", "Castbar: Target Extra",  220, 80)
 end
 
 -- -----------------------------------------------------------------------------
--- Settings UI  (UNCHANGED from your v7.2)
+-- Settings UI
 -- -----------------------------------------------------------------------------
 local _sliderId = 0
 local function NextSliderName()
@@ -1138,7 +1065,9 @@ local function CreateButton(parent, label, x, y, w, h, onClick)
     b:SetSize(w or 140, h or 22)
     b:SetPoint("TOPLEFT", x, y)
     b:SetText(label)
-    b:SetScript("OnClick", function() if onClick then onClick() end end)
+    b:SetScript("OnClick", function()
+        if onClick then onClick() end
+    end)
     return b
 end
 
@@ -1159,7 +1088,7 @@ local function CreateSlider(parent, label, x, y, minV, maxV, step, onValueChange
     s:SetWidth(260)
 
     local textFS = _G[name .. "Text"]
-    local lowFS  = _G[name .. "Low"]
+    local lowFS = _G[name .. "Low"]
     local highFS = _G[name .. "High"]
     if textFS then textFS:SetText(label) end
     if lowFS then lowFS:Hide() end
@@ -1184,7 +1113,15 @@ local function CreateSlider(parent, label, x, y, minV, maxV, step, onValueChange
     return s
 end
 
-local SETTINGS_KEYS = { "player", "player_mini", "player_extra", "target", "target_mini", "target_extra" }
+local SETTINGS_KEYS = {
+    "player",
+    "player_mini",
+    "player_extra",
+    "target",
+    "target_mini",
+    "target_extra",
+}
+
 local function PrettyKey(k)
     if k == "player" then return "Player" end
     if k == "player_mini" then return "Player Mini" end
@@ -1195,14 +1132,12 @@ local function PrettyKey(k)
     return k
 end
 
-local RANGE_H_WIDTH_MIN, RANGE_H_WIDTH_MAX   = 80, 520
+local RANGE_H_WIDTH_MIN, RANGE_H_WIDTH_MAX = 80, 520
 local RANGE_H_HEIGHT_MIN, RANGE_H_HEIGHT_MAX = 8, 160
-
-local RANGE_V_THICK_MIN, RANGE_V_THICK_MAX   = 2, 120
-local RANGE_V_LEN_MIN,   RANGE_V_LEN_MAX     = 80, 900
-
+local RANGE_V_THICK_MIN, RANGE_V_THICK_MAX = 2, 120
+local RANGE_V_LEN_MIN, RANGE_V_LEN_MAX = 80, 900
 local RANGE_TEXT_MIN, RANGE_TEXT_MAX = 6, 32
-local RANGE_ICON_MIN, RANGE_ICON_MAX = 0, 128 -- 0 = auto
+local RANGE_ICON_MIN, RANGE_ICON_MAX = 0, 128
 local RANGE_BOX_W_MIN, RANGE_BOX_W_MAX = 20, 600
 local RANGE_BOX_H_MIN, RANGE_BOX_H_MAX = 8, 120
 
@@ -1219,9 +1154,10 @@ end
 local function OpenColorPickerForKey(selectedKey, onChange)
     local dbAll = GetDB()
     if not dbAll or not dbAll[selectedKey] then return end
-    local sdb = dbAll[selectedKey]
 
-    sdb.color = sdb.color or {1,1,1,1}
+    local sdb = dbAll[selectedKey]
+    sdb.color = sdb.color or {1, 1, 1, 1}
+
     local r = tonumber(sdb.color[1]) or 1
     local g = tonumber(sdb.color[2]) or 1
     local b = tonumber(sdb.color[3]) or 1
@@ -1293,6 +1229,7 @@ local function OpenColorPickerForKey(selectedKey, onChange)
     if type(ColorPickerFrame.SetColorRGB) == "function" then
         ColorPickerFrame:SetColorRGB(r, g, b)
     end
+
     ColorPickerFrame:Show()
 end
 
@@ -1312,7 +1249,7 @@ local function EnsureSettingsPanel()
     f:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
     f:Hide()
 
-    CreateSafeBorder(f, 0, 1, {0.06,0.06,0.06,0.95}, {0,0,0,1})
+    CreateSafeBorder(f, 0, 1, {0.06, 0.06, 0.06, 0.95}, {0, 0, 0, 1})
 
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", 16, -16)
@@ -1335,6 +1272,7 @@ local function EnsureSettingsPanel()
     sf:SetScrollChild(content)
 
     local selectedKey = "player"
+
     local function GetSelectedDB()
         local db = GetDB()
         return db and db[selectedKey] or nil
@@ -1345,10 +1283,12 @@ local function EnsureSettingsPanel()
     local Y = -10
 
     local globalEnabled = CreateCheckbox(content, "Enable Castbars (disables Blizzard castbar)", LEFT_X, Y, function(_, v)
-        local db = GetDB(); if not db then return end
+        local db = GetDB()
+        if not db then return end
         db.global.enabled = v and true or false
         CB:Refresh()
     end)
+
     Y = Y - 34
 
     CreateButton(content, "Toggle Test Mode", LEFT_X, Y, 160, 22, function()
@@ -1357,189 +1297,213 @@ local function EnsureSettingsPanel()
     end)
 
     CreateButton(content, "Reset Selected Position", LEFT_X + 170, Y, 190, 22, function()
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].x = DEFAULT_DB[selectedKey] and DEFAULT_DB[selectedKey].x or 0
         db[selectedKey].y = DEFAULT_DB[selectedKey] and DEFAULT_DB[selectedKey].y or 0
         UpdateBarLayout(selectedKey)
         if f.RefreshSection then f:RefreshSection() end
     end)
+
     Y = Y - 44
 
     local dropdown = CreateFrame("Frame", "RobUICastbarDrop", content, "UIDropDownMenuTemplate")
     dropdown:SetPoint("TOPLEFT", LEFT_X - 12, Y)
-    if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(dropdown, 260) end
+    if UIDropDownMenu_SetWidth then
+        UIDropDownMenu_SetWidth(dropdown, 260)
+    end
+
     Y = Y - 50
-
     CreateHeader(content, "Bar", LEFT_X, Y)
-    Y = Y - 18
 
+    Y = Y - 18
     f.cbEnabled = CreateCheckbox(content, "Enabled (this bar)", LEFT_X, Y, function(_, v)
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].enabled = v and true or false
         UpdateBarLayout(selectedKey)
     end)
-    Y = Y - 28
 
+    Y = Y - 28
     f.cbIcon = CreateCheckbox(content, "Show Icon", LEFT_X, Y, function(_, v)
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].showIcon = v and true or false
         UpdateBarLayout(selectedKey)
     end)
-    Y = Y - 28
 
+    Y = Y - 28
     f.cbLatency = CreateCheckbox(content, "Show Latency (player only)", LEFT_X, Y, function(_, v)
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].showLatency = v and true or false
         UpdateBarLayout(selectedKey)
     end)
-    Y = Y - 34
 
+    Y = Y - 34
     f.btnColor = CreateButton(content, "Pick Bar Color", LEFT_X, Y, 160, 22, function()
         OpenColorPickerForKey(selectedKey, function()
             if f.RefreshSection then f:RefreshSection() end
         end)
     end)
+
     Y = Y - 44
-
     CreateHeader(content, "Size", LEFT_X, Y)
-    Y = Y - 18
 
+    Y = Y - 18
     f.slW = CreateSlider(content, "Width", LEFT_X, Y, RANGE_H_WIDTH_MIN, RANGE_H_WIDTH_MAX, 1, function(_, v)
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].width = floor(tonumber(v) or 200)
         UpdateBarLayout(selectedKey)
     end)
-    Y = Y - 62
 
+    Y = Y - 62
     f.slH = CreateSlider(content, "Height", LEFT_X, Y, RANGE_H_HEIGHT_MIN, RANGE_H_HEIGHT_MAX, 1, function(_, v)
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].height = floor(tonumber(v) or 14)
         UpdateBarLayout(selectedKey)
     end)
-    Y = Y - 62
 
+    Y = Y - 62
     f.slIcon = CreateSlider(content, "Icon Size (0=Auto)", LEFT_X, Y, RANGE_ICON_MIN, RANGE_ICON_MAX, 1, function(_, v)
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].iconSize = floor(tonumber(v) or 0)
         UpdateBarLayout(selectedKey)
     end)
 
     local RY = -10
     CreateHeader(content, "Text", RIGHT_X, RY)
-    RY = RY - 18
 
+    RY = RY - 18
     f.slTextSize = CreateSlider(content, "Cast Text Size", RIGHT_X, RY, RANGE_TEXT_MIN, RANGE_TEXT_MAX, 1, function(_, v)
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].textSize = floor(tonumber(v) or 11)
         UpdateBarLayout(selectedKey)
     end)
-    RY = RY - 62
 
+    RY = RY - 62
     f.slTimeSize = CreateSlider(content, "Time Text Size", RIGHT_X, RY, RANGE_TEXT_MIN, RANGE_TEXT_MAX, 1, function(_, v)
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].timeSize = floor(tonumber(v) or 11)
         UpdateBarLayout(selectedKey)
     end)
+
     RY = RY - 72
-
     CreateHeader(content, "Extra Bars (player_extra / target_extra)", RIGHT_X, RY)
-    RY = RY - 18
 
+    RY = RY - 18
     f.cbVertical = CreateCheckbox(content, "Vertical mode", RIGHT_X, RY, function(_, v)
         if not IsExtraKey(selectedKey) then
             if f.cbVertical then f.cbVertical:SetChecked(false) end
             return
         end
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].vertical = v and true or false
         UpdateBarLayout(selectedKey)
         if f.RefreshSection then f:RefreshSection() end
     end)
+
     RY = RY - 36
-
     f.extraHeader = CreateHeader(content, "Extra Text Position", RIGHT_X, RY)
-    RY = RY - 18
 
+    RY = RY - 18
     f.slTextX = CreateSlider(content, "Cast Text X", RIGHT_X, RY, -300, 300, 1, function(_, v)
         if not IsExtraKey(selectedKey) then return end
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].textX = floor(tonumber(v) or 0)
         UpdateBarLayout(selectedKey)
     end)
-    RY = RY - 62
 
+    RY = RY - 62
     f.slTextY = CreateSlider(content, "Cast Text Y", RIGHT_X, RY, -300, 300, 1, function(_, v)
         if not IsExtraKey(selectedKey) then return end
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].textY = floor(tonumber(v) or 0)
         UpdateBarLayout(selectedKey)
     end)
-    RY = RY - 62
 
+    RY = RY - 62
     f.slTimeX = CreateSlider(content, "Time Text X", RIGHT_X, RY, -300, 300, 1, function(_, v)
         if not IsExtraKey(selectedKey) then return end
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].timeX = floor(tonumber(v) or 0)
         UpdateBarLayout(selectedKey)
     end)
-    RY = RY - 62
 
+    RY = RY - 62
     f.slTimeY = CreateSlider(content, "Time Text Y", RIGHT_X, RY, -300, 300, 1, function(_, v)
         if not IsExtraKey(selectedKey) then return end
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].timeY = floor(tonumber(v) or 0)
         UpdateBarLayout(selectedKey)
     end)
+
     RY = RY - 72
-
     f.boxHeader = CreateHeader(content, "Extra Text Boxes", RIGHT_X, RY)
-    RY = RY - 18
 
+    RY = RY - 18
     f.slTextBoxW = CreateSlider(content, "Cast Text Box Width", RIGHT_X, RY, RANGE_BOX_W_MIN, RANGE_BOX_W_MAX, 1, function(_, v)
         if not IsExtraKey(selectedKey) then return end
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].textBoxW = floor(tonumber(v) or 160)
         UpdateBarLayout(selectedKey)
     end)
-    RY = RY - 62
 
+    RY = RY - 62
     f.slTextBoxH = CreateSlider(content, "Cast Text Box Height", RIGHT_X, RY, RANGE_BOX_H_MIN, RANGE_BOX_H_MAX, 1, function(_, v)
         if not IsExtraKey(selectedKey) then return end
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].textBoxH = floor(tonumber(v) or 18)
         UpdateBarLayout(selectedKey)
     end)
-    RY = RY - 62
 
+    RY = RY - 62
     f.slTimeBoxW = CreateSlider(content, "Time Text Box Width", RIGHT_X, RY, RANGE_BOX_W_MIN, RANGE_BOX_W_MAX, 1, function(_, v)
         if not IsExtraKey(selectedKey) then return end
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].timeBoxW = floor(tonumber(v) or 60)
         UpdateBarLayout(selectedKey)
     end)
-    RY = RY - 62
 
+    RY = RY - 62
     f.slTimeBoxH = CreateSlider(content, "Time Text Box Height", RIGHT_X, RY, RANGE_BOX_H_MIN, RANGE_BOX_H_MAX, 1, function(_, v)
         if not IsExtraKey(selectedKey) then return end
-        local db = GetDB(); if not db or not db[selectedKey] then return end
+        local db = GetDB()
+        if not db or not db[selectedKey] then return end
         db[selectedKey].timeBoxH = floor(tonumber(v) or 18)
         UpdateBarLayout(selectedKey)
     end)
-
-    local function SetDropText(t)
-        if UIDropDownMenu_SetText then UIDropDownMenu_SetText(dropdown, t) end
-    end
 
     local function ShowExtraControls(show)
         local function S(w)
             if not w then return end
             if show then w:Show() else w:Hide() end
         end
+
         S(f.cbVertical)
         S(f.extraHeader)
-        S(f.slTextX); S(f.slTextY); S(f.slTimeX); S(f.slTimeY)
+        S(f.slTextX)
+        S(f.slTextY)
+        S(f.slTimeX)
+        S(f.slTimeY)
         S(f.boxHeader)
-        S(f.slTextBoxW); S(f.slTextBoxH); S(f.slTimeBoxW); S(f.slTimeBoxH)
+        S(f.slTextBoxW)
+        S(f.slTextBoxH)
+        S(f.slTimeBoxW)
+        S(f.slTimeBoxH)
     end
 
     local function UpdateSizeSliderLabelsAndRanges(isExtra, isVertical)
@@ -1562,6 +1526,7 @@ local function EnsureSettingsPanel()
     local function RefreshAllControls()
         local db = GetDB()
         if not db then return end
+
         globalEnabled:SetChecked(db.global.enabled and true or false)
 
         local sdb = GetSelectedDB()
@@ -1580,32 +1545,75 @@ local function EnsureSettingsPanel()
         local isVertical = (isExtra and sdb.vertical) and true or false
 
         ShowExtraControls(isExtra)
-        if isExtra and f.cbVertical then f.cbVertical:SetChecked(isVertical and true or false) end
+
+        if isExtra and f.cbVertical then
+            f.cbVertical:SetChecked(isVertical and true or false)
+        end
+
         UpdateSizeSliderLabelsAndRanges(isExtra, isVertical)
 
-        if f.slW then f.slW:SetValue(tonumber(sdb.width) or 200); f.slW:SetExactValueText(tonumber(sdb.width) or 200) end
-        if f.slH then f.slH:SetValue(tonumber(sdb.height) or 14); f.slH:SetExactValueText(tonumber(sdb.height) or 14) end
-        if f.slIcon then f.slIcon:SetValue(tonumber(sdb.iconSize) or 0); f.slIcon:SetExactValueText(tonumber(sdb.iconSize) or 0) end
-
-        if f.slTextSize then f.slTextSize:SetValue(tonumber(sdb.textSize) or 11); f.slTextSize:SetExactValueText(tonumber(sdb.textSize) or 11) end
-        if f.slTimeSize then f.slTimeSize:SetValue(tonumber(sdb.timeSize) or 11); f.slTimeSize:SetExactValueText(tonumber(sdb.timeSize) or 11) end
+        if f.slW then
+            f.slW:SetValue(tonumber(sdb.width) or 200)
+            f.slW:SetExactValueText(tonumber(sdb.width) or 200)
+        end
+        if f.slH then
+            f.slH:SetValue(tonumber(sdb.height) or 14)
+            f.slH:SetExactValueText(tonumber(sdb.height) or 14)
+        end
+        if f.slIcon then
+            f.slIcon:SetValue(tonumber(sdb.iconSize) or 0)
+            f.slIcon:SetExactValueText(tonumber(sdb.iconSize) or 0)
+        end
+        if f.slTextSize then
+            f.slTextSize:SetValue(tonumber(sdb.textSize) or 11)
+            f.slTextSize:SetExactValueText(tonumber(sdb.textSize) or 11)
+        end
+        if f.slTimeSize then
+            f.slTimeSize:SetValue(tonumber(sdb.timeSize) or 11)
+            f.slTimeSize:SetExactValueText(tonumber(sdb.timeSize) or 11)
+        end
 
         if isExtra then
-            if f.slTextX then f.slTextX:SetValue(tonumber(sdb.textX) or 0); f.slTextX:SetExactValueText(tonumber(sdb.textX) or 0) end
-            if f.slTextY then f.slTextY:SetValue(tonumber(sdb.textY) or 0); f.slTextY:SetExactValueText(tonumber(sdb.textY) or 0) end
-            if f.slTimeX then f.slTimeX:SetValue(tonumber(sdb.timeX) or 0); f.slTimeX:SetExactValueText(tonumber(sdb.timeX) or 0) end
-            if f.slTimeY then f.slTimeY:SetValue(tonumber(sdb.timeY) or 0); f.slTimeY:SetExactValueText(tonumber(sdb.timeY) or 0) end
-
-            if f.slTextBoxW then f.slTextBoxW:SetValue(tonumber(sdb.textBoxW) or 160); f.slTextBoxW:SetExactValueText(tonumber(sdb.textBoxW) or 160) end
-            if f.slTextBoxH then f.slTextBoxH:SetValue(tonumber(sdb.textBoxH) or 18);  f.slTextBoxH:SetExactValueText(tonumber(sdb.textBoxH) or 18) end
-            if f.slTimeBoxW then f.slTimeBoxW:SetValue(tonumber(sdb.timeBoxW) or 60);  f.slTimeBoxW:SetExactValueText(tonumber(sdb.timeBoxW) or 60) end
-            if f.slTimeBoxH then f.slTimeBoxH:SetValue(tonumber(sdb.timeBoxH) or 18);  f.slTimeBoxH:SetExactValueText(tonumber(sdb.timeBoxH) or 18) end
+            if f.slTextX then
+                f.slTextX:SetValue(tonumber(sdb.textX) or 0)
+                f.slTextX:SetExactValueText(tonumber(sdb.textX) or 0)
+            end
+            if f.slTextY then
+                f.slTextY:SetValue(tonumber(sdb.textY) or 0)
+                f.slTextY:SetExactValueText(tonumber(sdb.textY) or 0)
+            end
+            if f.slTimeX then
+                f.slTimeX:SetValue(tonumber(sdb.timeX) or 0)
+                f.slTimeX:SetExactValueText(tonumber(sdb.timeX) or 0)
+            end
+            if f.slTimeY then
+                f.slTimeY:SetValue(tonumber(sdb.timeY) or 0)
+                f.slTimeY:SetExactValueText(tonumber(sdb.timeY) or 0)
+            end
+            if f.slTextBoxW then
+                f.slTextBoxW:SetValue(tonumber(sdb.textBoxW) or 160)
+                f.slTextBoxW:SetExactValueText(tonumber(sdb.textBoxW) or 160)
+            end
+            if f.slTextBoxH then
+                f.slTextBoxH:SetValue(tonumber(sdb.textBoxH) or 18)
+                f.slTextBoxH:SetExactValueText(tonumber(sdb.textBoxH) or 18)
+            end
+            if f.slTimeBoxW then
+                f.slTimeBoxW:SetValue(tonumber(sdb.timeBoxW) or 60)
+                f.slTimeBoxW:SetExactValueText(tonumber(sdb.timeBoxW) or 60)
+            end
+            if f.slTimeBoxH then
+                f.slTimeBoxH:SetValue(tonumber(sdb.timeBoxH) or 18)
+                f.slTimeBoxH:SetExactValueText(tonumber(sdb.timeBoxH) or 18)
+            end
         end
     end
 
     local function OnSelectKey(key)
         selectedKey = key
-        if UIDropDownMenu_SetText then UIDropDownMenu_SetText(dropdown, "Edit: " .. PrettyKey(key)) end
+        if UIDropDownMenu_SetText then
+            UIDropDownMenu_SetText(dropdown, "Edit: " .. PrettyKey(key))
+        end
         RefreshAllControls()
     end
 
@@ -1620,19 +1628,27 @@ local function EnsureSettingsPanel()
             local i = UIDropDownMenu_CreateInfo()
             i.text = PrettyKey(k)
             i.notCheckable = true
-            i.func = function() OnSelectKey(k) end
+            i.func = function()
+                OnSelectKey(k)
+            end
             UIDropDownMenu_AddButton(i, level)
         end
     end
 
-    if UIDropDownMenu_Initialize then UIDropDownMenu_Initialize(dropdown, InitDropdown) end
+    if UIDropDownMenu_Initialize then
+        UIDropDownMenu_Initialize(dropdown, InitDropdown)
+    end
 
     function f:RefreshSection()
         RefreshAllControls()
-        if UIDropDownMenu_SetText then UIDropDownMenu_SetText(dropdown, "Edit: " .. PrettyKey(selectedKey)) end
+        if UIDropDownMenu_SetText then
+            UIDropDownMenu_SetText(dropdown, "Edit: " .. PrettyKey(selectedKey))
+        end
     end
 
-    f:SetScript("OnShow", function() OnSelectKey(selectedKey) end)
+    f:SetScript("OnShow", function()
+        OnSelectKey(selectedKey)
+    end)
 
     CB.SettingsPanel = f
     return f
@@ -1673,7 +1689,11 @@ local function OpenSettings()
         return
     end
 
-    if panel:IsShown() then panel:Hide() else panel:Show() end
+    if panel:IsShown() then
+        panel:Hide()
+    else
+        panel:Show()
+    end
 end
 
 -- -----------------------------------------------------------------------------
@@ -1692,6 +1712,7 @@ local initFrame = CreateFrame("Frame")
 initFrame:RegisterEvent("PLAYER_LOGIN")
 initFrame:SetScript("OnEvent", function()
     if not GetDB() then return end
+
     C_Timer.After(1, function()
         if not GetDB() then return end
         BuildAllBars()
@@ -1707,19 +1728,23 @@ end)
 SLASH_ROBCAST1 = "/robcast"
 SlashCmdList["ROBCAST"] = function(msg)
     msg = (msg or ""):lower()
+
     if msg == "test" then
         CB:ToggleTestMode()
         return
     elseif msg == "on" then
-        local db = GetDB(); if not db then return end
+        local db = GetDB()
+        if not db then return end
         db.global.enabled = true
         CB:Refresh()
         return
     elseif msg == "off" then
-        local db = GetDB(); if not db then return end
+        local db = GetDB()
+        if not db then return end
         db.global.enabled = false
         CB:Refresh()
         return
     end
+
     OpenSettings()
 end
