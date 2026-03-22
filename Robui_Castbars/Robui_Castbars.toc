@@ -1,0 +1,19 @@
+## Interface: 120000
+## Title: RobUI Castbars
+## Notes: Modular castbars for RobUI
+## Author: Robur / ChatGPT
+## Version: 7.4.0
+## RequiredDeps: Robui
+## OptionalDeps: RobUI_CombatGrid
+## SavedVariablesPerCharacter:
+## IconTexture: Interface\Icons\Spell_Nature_Lightning
+
+init.lua
+util.lua
+db.lua
+grid.lua
+visuals.lua
+state.lua
+bars.lua
+settings.lua
+core.lua
