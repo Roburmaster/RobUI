@@ -1,6 +1,7 @@
 -- ============================================================================
 -- RCA_Scanner.lua
 -- Highly optimized scanner for Action Bars, Keybinds, Proc Overlays, and Cooldowns.
+-- Midnight-safe: avoids direct comparisons on secret values.
 -- ============================================================================
 
 local AddonName, ns = ...
@@ -15,6 +16,8 @@ local CreateFrame = CreateFrame
 local wipe = wipe
 local C_Timer = C_Timer
 local C_Spell = C_Spell
+local GetSpellCooldown = GetSpellCooldown
+local type = type
 
 local activeProcs = {}
 local hotkeyCache = {}
@@ -23,21 +26,28 @@ local scannerFrame = CreateFrame("Frame")
 
 local GCD_SPELL_ID = 61304
 
+local function IsSecret(v)
+    return ns.API and ns.API.IsSecret and ns.API.IsSecret(v) or false
+end
+
 local function SafeGetSpellCooldown(spellID)
     if not spellID then
-        return 0, 0, 0, false
+        return 0, 0, 1, false
     end
 
     if C_Spell and C_Spell.GetSpellCooldown then
         local info = C_Spell.GetSpellCooldown(spellID)
         if info then
-            local startTime = info.startTime or 0
-            local duration = info.duration or 0
+            local startTime = info.startTime
+            local duration = info.duration
             local isEnabled = info.isEnabled
-            local modRate = info.modRate or 1
+            local modRate = info.modRate
 
             if isEnabled == nil then
                 isEnabled = true
+            end
+            if modRate == nil then
+                modRate = 1
             end
 
             return startTime, duration, modRate, isEnabled
@@ -53,7 +63,19 @@ local function SafeGetSpellCooldown(spellID)
 end
 
 local function NormalizeRemaining(startTime, duration, now)
-    if not startTime or not duration or startTime <= 0 or duration <= 0 then
+    if startTime == nil or duration == nil then
+        return 0
+    end
+
+    if IsSecret(startTime) or IsSecret(duration) then
+        return 0
+    end
+
+    if type(startTime) ~= "number" or type(duration) ~= "number" then
+        return 0
+    end
+
+    if startTime <= 0 or duration <= 0 then
         return 0
     end
 
@@ -162,11 +184,15 @@ function ns.Scanner.GetGCDInfo()
     local startTime, duration, modRate, enabled = SafeGetSpellCooldown(GCD_SPELL_ID)
     local remaining = NormalizeRemaining(startTime, duration, now)
 
+    if IsSecret(startTime) then startTime = 0 end
+    if IsSecret(duration) then duration = 0 end
+    if IsSecret(modRate) then modRate = 1 end
+
     return {
-        startTime = startTime,
-        duration = duration,
-        modRate = modRate,
-        enabled = enabled,
+        startTime = type(startTime) == "number" and startTime or 0,
+        duration = type(duration) == "number" and duration or 0,
+        modRate = type(modRate) == "number" and modRate or 1,
+        enabled = enabled and true or false,
         remaining = remaining,
         active = remaining > 0,
     }
@@ -202,20 +228,27 @@ function ns.Scanner.GetSpellCooldownInfo(spellID)
     local gcdStart, gcdDuration, gcdModRate, gcdEnabled = SafeGetSpellCooldown(GCD_SPELL_ID)
     local gcdRemaining = NormalizeRemaining(gcdStart, gcdDuration, now)
 
+    if IsSecret(spellStart) or type(spellStart) ~= "number" then spellStart = 0 end
+    if IsSecret(spellDuration) or type(spellDuration) ~= "number" then spellDuration = 0 end
+    if IsSecret(spellModRate) or type(spellModRate) ~= "number" then spellModRate = 1 end
+
+    if IsSecret(gcdStart) or type(gcdStart) ~= "number" then gcdStart = 0 end
+    if IsSecret(gcdDuration) or type(gcdDuration) ~= "number" then gcdDuration = 0 end
+    if IsSecret(gcdModRate) or type(gcdModRate) ~= "number" then gcdModRate = 1 end
+
     local displayStart = spellStart
     local displayDuration = spellDuration
     local displayRemaining = spellRemaining
 
     local isOnGCD = gcdRemaining > 0
     local isOnCooldown = spellRemaining > 0
-
     local isBlockedByGCDOnly = false
 
     if gcdRemaining > spellRemaining then
         displayStart = gcdStart
         displayDuration = gcdDuration
         displayRemaining = gcdRemaining
-        isBlockedByGCDOnly = spellRemaining <= 0 and gcdRemaining > 0
+        isBlockedByGCDOnly = (spellRemaining <= 0 and gcdRemaining > 0)
     end
 
     return {
@@ -224,13 +257,13 @@ function ns.Scanner.GetSpellCooldownInfo(spellID)
         startTime = spellStart,
         duration = spellDuration,
         modRate = spellModRate,
-        enabled = spellEnabled,
+        enabled = spellEnabled and true or false,
         remaining = spellRemaining,
 
         gcdStartTime = gcdStart,
         gcdDuration = gcdDuration,
         gcdModRate = gcdModRate,
-        gcdEnabled = gcdEnabled,
+        gcdEnabled = gcdEnabled and true or false,
         gcdRemaining = gcdRemaining,
 
         displayStartTime = displayStart,
