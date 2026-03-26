@@ -7,6 +7,8 @@
 --      R.Database.profile.rca[pluginId][CLASS][SPEC_ID] = cfg
 --  - Auto-swap cfg on spec change
 --  - Combat-safe refresh (defer while in combat)
+--  - Cooldown swipe now uses ns.Scanner.GetSpellCooldownInfo()
+--    for both real cooldowns and GCD display.
 -- ============================================================================
 
 local AddonName, ns = ...
@@ -33,7 +35,6 @@ local tinsert = table.insert
 local tremove = table.remove
 local GetItemSpell = GetItemSpell
 local GetInventoryItemID = GetInventoryItemID
-local GetInventoryItemCooldown = GetInventoryItemCooldown
 local GetSpecialization = GetSpecialization
 local ClearCursor = ClearCursor
 local GetCursorInfo = GetCursorInfo
@@ -45,6 +46,7 @@ local C_Timer = C_Timer
 local GameTooltip = GameTooltip
 local table_sort = table.sort
 local select = select
+local C_Spell = C_Spell
 
 -- RobUI (hard dependency)
 local R = _G.Robui or _G.RobUI or _G["Robui"] or _G["RobUI"]
@@ -91,7 +93,6 @@ local function GetClassToken()
 end
 
 local function GetSpecID()
-    -- Spec changes happen in-combat sometimes. Still safe to read.
     local s = 0
     if GetSpecialization then
         s = GetSpecialization() or 0
@@ -118,15 +119,11 @@ local function EnsureScopedConfig(pluginRoot, classToken, specId)
 end
 
 local function MigrateLegacyIfNeeded(pluginRoot, classToken, specId)
-    -- If old versions stored keys directly under pluginRoot (offCount, etc),
-    -- move them into current scope once.
     if pluginRoot and type(pluginRoot) == "table" and pluginRoot._migratedLegacy ~= true then
-        -- Heuristic: if pluginRoot.offCount exists and pluginRoot[classToken] isn't a table yet.
         if pluginRoot.offCount ~= nil or pluginRoot.cdCount ~= nil or pluginRoot.mainSize ~= nil then
             local scoped = EnsureScopedConfig(pluginRoot, classToken, specId)
             for k, v in pairs(pluginRoot) do
                 if k ~= "_migratedLegacy" and k ~= classToken then
-                    -- Only move "primitive settings + tables", ignore any future class buckets.
                     if type(k) == "string" and k ~= "UNKNOWN" then
                         if scoped[k] == nil then
                             scoped[k] = v
@@ -134,11 +131,6 @@ local function MigrateLegacyIfNeeded(pluginRoot, classToken, specId)
                     end
                 end
             end
-            -- Clean legacy keys (optional, but keeps DB clean)
-            for k, _ in pairs(scoped) do
-                -- nothing
-            end
-            -- Mark migrated (do not repeatedly move)
             pluginRoot._migratedLegacy = true
         else
             pluginRoot._migratedLegacy = true
@@ -221,7 +213,6 @@ local DEFAULTS = {
     defDir    = "RIGHT",
     healDir   = "RIGHT",
 
-    -- Visibility toggles
     showOff   = true,
     showCd    = true,
     showDef   = true,
@@ -333,9 +324,16 @@ end
 
 local function ClearCooldown(cd)
     if not cd then return end
-    if cd.Clear then cd:Clear()
-    elseif cd.ClearCooldown then cd:ClearCooldown()
-    else cd:SetCooldown(0, 0) end
+    if cd.Clear then
+        cd:Clear()
+    elseif cd.ClearCooldown then
+        cd:ClearCooldown()
+    else
+        cd:SetCooldown(0, 0)
+    end
+    if cd.Hide then
+        cd:Hide()
+    end
 end
 
 local function IsKnownSafe(spellID)
@@ -389,6 +387,7 @@ local function CreateIconFrame(parent, size)
     if f.cd.SetDrawBling then f.cd:SetDrawBling(false) end
     if f.cd.SetDrawSwipe then f.cd:SetDrawSwipe(true) end
     if f.cd.SetHideCountdownNumbers then f.cd:SetHideCountdownNumbers(false) end
+    f.cd:Hide()
 
     f.hotkey = f:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
     f.hotkey:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
@@ -463,7 +462,6 @@ local function UpdateLayout()
     local function ConfigureRow(icons, parent, count, firstSize, restSize, spacing, direction)
         UpdateParentSize(parent, count, firstSize, restSize, spacing, direction)
 
-        -- NOTE: Your old code hard-limited to 4 icons. Keep it as-is.
         for i = 1, 4 do
             local size = (i == 1) and firstSize or restSize
             if not icons[i] then icons[i] = CreateIconFrame(parent, size) end
@@ -480,7 +478,7 @@ local function UpdateLayout()
                         icon:SetPoint("BOTTOM", parent, "BOTTOM", 0, 0)
                     elseif direction == "LEFT" then
                         icon:SetPoint("RIGHT", parent, "RIGHT", 0, 0)
-                    else -- "RIGHT"
+                    else
                         icon:SetPoint("LEFT", parent, "LEFT", 0, 0)
                     end
                 else
@@ -491,7 +489,7 @@ local function UpdateLayout()
                         icon:SetPoint("BOTTOM", prev, "TOP", 0, spacing)
                     elseif direction == "LEFT" then
                         icon:SetPoint("RIGHT", prev, "LEFT", -spacing, 0)
-                    else -- "RIGHT"
+                    else
                         icon:SetPoint("LEFT", prev, "RIGHT", spacing, 0)
                     end
                 end
@@ -882,32 +880,27 @@ local function BuildEmbeddedPanel(parent)
     title:SetPoint("TOPLEFT", 20, -15)
     title:SetText("Combat Assistant")
 
-    -- Left Column (Counts)
     CreateModernSlider(p, "OffCount",  "Rotation Amount",  -50, 1, 4, "offCount")
     CreateModernSlider(p, "CdCount",   "Cooldown Amount",  -100, 1, 4, "cdCount")
     CreateModernSlider(p, "DefCount",  "Defensive Amount", -150, 1, 4, "defCount")
     CreateModernSlider(p, "HealCount", "Healing Amount",   -200, 1, 4, "healCount")
 
-    -- Left Column (Sizes)
     CreateModernSlider(p, "MainSize",  "Main Attack Size", -250, 20, 100, "mainSize")
     CreateModernSlider(p, "QueueSize", "Next Attack Size", -300, 20, 100, "queueSize")
     CreateModernSlider(p, "CdSize",    "Cooldown Size",    -350, 20, 100, "cdSize")
     CreateModernSlider(p, "DefSize",   "Defensive Size",   -400, 20, 100, "defSize")
     CreateModernSlider(p, "HealSize",  "Healing Size",     -450, 20, 100, "healSize")
 
-    -- Direction Toggles
     CreateDirectionToggle(p, "Offensive", 20,  -500, "offDir")
     CreateDirectionToggle(p, "Cooldowns", 120, -500, "cdDir")
     CreateDirectionToggle(p, "Defensive", 20,  -550, "defDir")
     CreateDirectionToggle(p, "Healing",   120, -550, "healDir")
 
-    -- Visibility Toggles
     CreateVisibilityToggle(p, "Show Offensive", 20, -600, "showOff")
     CreateVisibilityToggle(p, "Show Cooldowns", 140, -600, "showCd")
     CreateVisibilityToggle(p, "Show Defensive", 20, -630, "showDef")
     CreateVisibilityToggle(p, "Show Healing",   140, -630, "showHeal")
 
-    -- Right Column (DropZones)
     CreateVisualDropZone(p, "Offensive Priority (Not working as intended)", 340, -50,  "offPriority")
     CreateVisualDropZone(p, "Cooldown Priority",  340, -120, "cdPriority")
     CreateVisualDropZone(p, "Defensive Priority", 340, -190, "defPriority")
@@ -937,7 +930,7 @@ local function BuildEmbeddedPanel(parent)
             local classToken = GetClassToken()
             local specId = GetSpecID()
             prof[MODULE_ROOT_KEY][PLUGIN_ROOT][classToken] = prof[MODULE_ROOT_KEY][PLUGIN_ROOT][classToken] or {}
-            prof[MODULE_ROOT_KEY][PLUGIN_ROOT][classToken][specId] = {} -- wipe ONLY current spec bucket
+            prof[MODULE_ROOT_KEY][PLUGIN_ROOT][classToken][specId] = {}
 
             DB:ResetCache()
             CONFIG = DB:GetConfig(PLUGIN_ROOT)
@@ -955,22 +948,18 @@ local function BuildEmbeddedPanel(parent)
     ieBtn:SetSize(120, 25)
     ieBtn:SetText("Import / Export")
 
-    -- ========================================================================
-    -- CUSTOM KEYBINDS TOGGLE
-    -- ========================================================================
     local kbBtn = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
     kbBtn:SetPoint("LEFT", ieBtn, "RIGHT", 10, 0)
     kbBtn:SetSize(120, 25)
     kbBtn:SetText("Custom Binds")
     kbBtn:SetScript("OnClick", function()
-    if ns.Keybinds and ns.Keybinds.Toggle then
-        ns.Keybinds.Toggle()
-    else
-        print("|cffff0000RCA:|r KeyBinds.lua is not loaded. Check .toc filename/case.")
-    end
-end)
+        if ns.Keybinds and ns.Keybinds.Toggle then
+            ns.Keybinds.Toggle()
+        else
+            print("|cffff0000RCA:|r KeyBinds.lua is not loaded. Check .toc filename/case.")
+        end
+    end)
 
-    -- Import / Export UI setup
     local ieFrame = CreateFrame("Frame", nil, p, "BackdropTemplate")
     ieFrame:SetAllPoints()
     ieFrame:SetFrameLevel(p:GetFrameLevel() + 50)
@@ -1171,56 +1160,39 @@ end
 -- ============================================================================
 -- QUEUE LOGIC & RENDERING
 -- ============================================================================
-local GCD_SPELL_ID = 61304
-
-local function ApplyCooldownWithGCD(frame, spellID)
-    local st, dur = 0, 0
-    local cdInfo = C_Spell.GetSpellCooldown(spellID)
-
-    if cdInfo then
-        st, dur = cdInfo.startTime, cdInfo.duration
+local function ApplyCooldownFromScanner(frame, spellID)
+    if not frame or not frame.cd then
+        return
     end
 
-    local isSecDur = ns.API.IsSecret(dur)
-
-    if not isSecDur and (not dur or dur <= 0) then
-        for slot = 1, 19 do
-            local itemID = GetInventoryItemID("player", slot)
-            if itemID then
-                local _, itemSpellID = GetItemSpell(itemID)
-                if itemSpellID == spellID then
-                    local ist, idur = GetInventoryItemCooldown("player", slot)
-                    if ist and idur then
-                        st, dur = ist, idur
-                        isSecDur = ns.API.IsSecret(dur)
-                        break
-                    end
-                end
-            end
-        end
+    if not ns.Scanner or not ns.Scanner.GetSpellCooldownInfo then
+        ClearCooldown(frame.cd)
+        return
     end
 
-    if st and dur then
-        pcall(function() frame.cd:SetCooldown(st, dur) end)
+    local cd = ns.Scanner.GetSpellCooldownInfo(spellID)
+    if not cd then
+        ClearCooldown(frame.cd)
+        return
+    end
+
+    local startTime = cd.displayStartTime or 0
+    local duration = cd.displayDuration or 0
+    local remaining = cd.displayRemaining or 0
+
+    if ns.API.IsSecret(startTime) or ns.API.IsSecret(duration) or ns.API.IsSecret(remaining) then
+        ClearCooldown(frame.cd)
+        return
+    end
+
+    if type(startTime) == "number" and type(duration) == "number" and type(remaining) == "number"
+        and startTime > 0 and duration > 0 and remaining > 0 then
+        frame.cd:Show()
+        pcall(function()
+            frame.cd:SetCooldown(startTime, duration)
+        end)
     else
         ClearCooldown(frame.cd)
-        st, dur = 0, 0
-    end
-
-    local applyGcd = false
-    if not isSecDur and type(dur) == "number" then
-        if dur <= 0 then applyGcd = true end
-    end
-
-    if applyGcd then
-        local gcd = C_Spell.GetSpellCooldown(GCD_SPELL_ID)
-        if gcd then
-            local gst, gdur = gcd.startTime, gcd.duration
-            if not ns.API.IsSecret(gdur) and type(gdur) == "number" and gdur > 0 then
-                pcall(function() frame.cd:SetCooldown(gst, gdur) end)
-                st, dur = gst, gdur
-            end
-        end
     end
 end
 
@@ -1233,7 +1205,6 @@ local function Render(frame, baseSpellID)
         if info and info.iconID then
             frame.tex:SetTexture(info.iconID)
 
-            -- Priority: Check Custom Binds first
             local bindText = ""
             if ns.CONFIG.customBinds and ns.CONFIG.customBinds[spellID] then
                 bindText = ns.CONFIG.customBinds[spellID]
@@ -1242,7 +1213,7 @@ local function Render(frame, baseSpellID)
             end
             frame.hotkey:SetText(bindText)
 
-            ApplyCooldownWithGCD(frame, spellID)
+            ApplyCooldownFromScanner(frame, spellID)
 
             local usable, noMana = ns.API.IsSpellUsableSafe(spellID)
             local onRealCooldown = not ns.API.IsSpellReadySafe(spellID)
@@ -1285,7 +1256,6 @@ local function AddUnique(queue, spellID, limit, forceKnown)
 end
 
 local function SmartFill(queue, priorityList, defaultList, limit)
-    -- Pass 1: Ready spells
     if priorityList then
         for _, id in ipairs(priorityList) do
             if #queue >= limit then return end
@@ -1304,7 +1274,6 @@ local function SmartFill(queue, priorityList, defaultList, limit)
         end
     end
 
-    -- Pass 2: Spells on cooldown
     if priorityList then
         for _, id in ipairs(priorityList) do
             if #queue >= limit then return end
@@ -1367,7 +1336,7 @@ end
 
 local function BuildCDQueue()
     local queue = {}
-    local selfHeals, majorCDs, majorBuffs = GetClassLists()
+    local _, _, majorBuffs = GetClassLists()
     SmartFill(queue, CONFIG.cdPriority, majorBuffs, CONFIG.cdCount)
     return queue
 end
@@ -1385,7 +1354,7 @@ local function BuildDefQueue()
         end
     end
 
-    local selfHeals, majorCDs = GetClassLists()
+    local _, majorCDs = GetClassLists()
 
     local defDefaults = {}
     local healthPct = ns.API.GetHealthPctSafe()
@@ -1434,7 +1403,6 @@ local function UpdateAll()
     CONFIG = DB:GetConfig(PLUGIN_ROOT)
     ns.CONFIG = CONFIG
 
-    -- Only process and render if the parent frame is set to visible in the config
     if CONFIG.showOff then
         local offQueue = BuildOffQueue()
         for i = 1, CONFIG.offCount do Render(offIcons[i], offQueue[i]) end
@@ -1462,8 +1430,8 @@ end
 local driver = CreateFrame("Frame")
 local updateTimer = 0
 
-local COMBAT_UPDATE_RATE = 0.15  -- Balanced, responsive in combat (150ms)
-local IDLE_UPDATE_RATE = 0.5     -- Slowed down when idle (500ms)
+local COMBAT_UPDATE_RATE = 0.15
+local IDLE_UPDATE_RATE = 0.5
 
 driver:SetScript("OnUpdate", function(_, elapsed)
     updateTimer = updateTimer + (elapsed or 0)
@@ -1476,7 +1444,6 @@ driver:SetScript("OnUpdate", function(_, elapsed)
         rate = IDLE_UPDATE_RATE
     end
 
-    -- INSTANT EXIT Throttle. Kills CPU usage 99% of frames.
     if updateTimer < rate then return end
 
     if not isHidden then
@@ -1504,7 +1471,6 @@ local function ApplySwapRefresh()
     if ns.ApplyVisibility then ns.ApplyVisibility() end
     UpdateAllVisuals()
 
-    -- also refresh scanner hotkey cache if exists
     if ns.Scanner and ns.Scanner.UpdateActionBarCache then
         ns.Scanner.UpdateActionBarCache()
     end
@@ -1533,7 +1499,6 @@ SwapEvents:SetScript("OnEvent", function(_, event)
         return
     end
 
-    -- Spec/Class change detection
     local c = GetClassToken()
     local s = GetSpecID()
 
